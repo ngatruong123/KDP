@@ -184,16 +184,18 @@ async def main():
                     h_cu, w_cu = img_bgra.shape[:2]
                     img_upscaled = cv2.resize(img_bgra, (w_cu * 2, h_cu * 2), interpolation=cv2.INTER_LANCZOS4)
                     
-                    # 9. Ultra-Aggressive Convolution Sharpening Matrix (Maximum Acutance)
+                    # 9. Dual-Layer Hyper-Sharpening (HDR Pop + Large-Radius USM)
                     # Split channels to protect the flawless vector Alpha from halo-ringing
                     b_up, g_up, r_up, a_up = cv2.split(img_upscaled)
                     bgr_upscaled = cv2.merge([b_up, g_up, r_up])
                     
-                    # 3x3 High-Pass Filter Kernel (Deep-fry edge separation)
-                    kernel_sharpen = np.array([[-1, -1, -1], 
-                                               [-1,  9, -1], 
-                                               [-1, -1, -1]])
-                    sharpened_bgr = cv2.filter2D(bgr_upscaled, -1, kernel_sharpen)
+                    # Layer 1: OpenCV HDR Local Detail Enhance (Forces flat areas to pop micro-textures)
+                    bgr_upscaled = cv2.detailEnhance(bgr_upscaled, sigma_s=20, sigma_r=0.15)
+                    
+                    # Layer 2: Extreme Large-Radius Unsharp Mask for THICK lines
+                    # 3x3 kernels are usually invisible on 2048px+ images. We use Sigma 4.0 (~13x13 radius) at 300% Magnitude (3.0)
+                    blurred_bgr = cv2.GaussianBlur(bgr_upscaled, (0, 0), 4.0)
+                    sharpened_bgr = cv2.addWeighted(bgr_upscaled, 3.0, blurred_bgr, -2.0, 0)
                     
                     # Merge sharpened image back with the untouched perfect Alpha mask
                     sh_b, sh_g, sh_r = cv2.split(sharpened_bgr)
