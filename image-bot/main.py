@@ -189,9 +189,9 @@ async def main():
                     b_up, g_up, r_up, a_up = cv2.split(img_upscaled)
                     bgr_upscaled = cv2.merge([b_up, g_up, r_up])
                     
-                    # Local contrast recovery filter (Standard Hollywood USM matrix)
+                    # Increase local contrast recovery filter to EXTREME MAGNITUDE (2.5x)
                     blurred_bgr = cv2.GaussianBlur(bgr_upscaled, (0, 0), 2.0)
-                    sharpened_bgr = cv2.addWeighted(bgr_upscaled, 1.5, blurred_bgr, -0.5, 0)
+                    sharpened_bgr = cv2.addWeighted(bgr_upscaled, 2.5, blurred_bgr, -1.5, 0)
                     
                     # Merge sharpened image back with the untouched perfect Alpha mask
                     sh_b, sh_g, sh_r = cv2.split(sharpened_bgr)
