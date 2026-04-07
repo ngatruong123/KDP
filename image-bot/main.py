@@ -113,15 +113,26 @@ async def main():
                     colors, counts = np.unique(border_pixels, axis=0, return_counts=True)
                     bg_bgr = colors[np.argmax(counts)] 
                     
-                    # 2. Extract base Hue in HSV color space
+                    # 2. Extract base Hue, Saturation, Value in HSV color space
                     hsv = cv2.cvtColor(input_img, cv2.COLOR_BGR2HSV)
                     bg_bgr_1px = np.uint8([[bg_bgr]])
                     bg_hsv = cv2.cvtColor(bg_bgr_1px, cv2.COLOR_BGR2HSV)[0][0]
                     hue_goc = int(bg_hsv[0])
+                    sat_goc = int(bg_hsv[1])
+                    val_goc = int(bg_hsv[2])
                     
                     # 3. Create global HSV mask covering hue variations and shadow gradients
-                    lower_bound = np.array([max(0, hue_goc - 25), 20, 20])
-                    upper_bound = np.array([min(179, hue_goc + 25), 255, 255])
+                    # Handle Achromatic (Black/White) independently from Chromatic (Colored)
+                    if val_goc < 40: # Pure Black background
+                        lower_bound = np.array([0, 0, 0])
+                        upper_bound = np.array([179, 255, val_goc + 40])
+                    elif sat_goc < 40 and val_goc > 200: # Pure White background
+                        lower_bound = np.array([0, 0, val_goc - 40])
+                        upper_bound = np.array([179, sat_goc + 40, 255])
+                    else: # Colored background
+                        lower_bound = np.array([max(0, hue_goc - 25), 20, 20])
+                        upper_bound = np.array([min(179, hue_goc + 25), 255, 255])
+                        
                     mask_bg = cv2.inRange(hsv, lower_bound, upper_bound)
                     
                     # Apply morphological close to patch minor noise
@@ -155,12 +166,14 @@ async def main():
                     
                     # 6. Apply dynamic color despill based on background hue
                     b, g, r = cv2.split(input_img)
-                    if 30 <= hue_goc <= 90:
-                        g = np.minimum(g, np.maximum(r, b))
-                    elif 90 < hue_goc <= 150:
-                        b = np.minimum(b, np.maximum(r, g))
-                    else:
-                        r = np.minimum(r, np.maximum(b, g))
+                    # Only apply Despill if the background is actually colored
+                    if val_goc >= 40 and not (sat_goc < 40 and val_goc > 200):
+                        if 30 <= hue_goc <= 90:
+                            g = np.minimum(g, np.maximum(r, b))
+                        elif 90 < hue_goc <= 150:
+                            b = np.minimum(b, np.maximum(r, g))
+                        else:
+                            r = np.minimum(r, np.maximum(b, g))
                     img_despilled = cv2.merge([b, g, r])
                     
                     # 7. Apply alpha mask
