@@ -167,11 +167,25 @@ async def main():
                     img_bgra = cv2.cvtColor(img_despilled, cv2.COLOR_BGR2BGRA)
                     img_bgra[:,:,3] = 255 - mask_blurred
                     
-                    # 8. Upscale to 2x and set metadata to 300 DPI
+                    # 8. Upscale to 2x
                     h_cu, w_cu = img_bgra.shape[:2]
                     img_upscaled = cv2.resize(img_bgra, (w_cu * 2, h_cu * 2), interpolation=cv2.INTER_LANCZOS4)
                     
-                    img_in_an = cv2.cvtColor(img_upscaled, cv2.COLOR_BGRA2RGBA)
+                    # 9. Unsharp Mask (USM) High-Frequency Sharpening
+                    # Split channels to protect the flawless vector Alpha from halo-ringing
+                    b_up, g_up, r_up, a_up = cv2.split(img_upscaled)
+                    bgr_upscaled = cv2.merge([b_up, g_up, r_up])
+                    
+                    # Local contrast recovery filter (Standard Hollywood USM matrix)
+                    blurred_bgr = cv2.GaussianBlur(bgr_upscaled, (0, 0), 2.0)
+                    sharpened_bgr = cv2.addWeighted(bgr_upscaled, 1.5, blurred_bgr, -0.5, 0)
+                    
+                    # Merge sharpened image back with the untouched perfect Alpha mask
+                    sh_b, sh_g, sh_r = cv2.split(sharpened_bgr)
+                    img_final = cv2.merge([sh_b, sh_g, sh_r, a_up])
+                    
+                    # 10. Set metadata to 300 DPI
+                    img_in_an = cv2.cvtColor(img_final, cv2.COLOR_BGRA2RGBA)
                     pil_img = Image.fromarray(img_in_an)
                     
                     final_upload_path = file_path.rsplit('.', 1)[0] + '_transparent.png'
