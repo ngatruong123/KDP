@@ -184,18 +184,22 @@ async def main():
                     h_cu, w_cu = img_bgra.shape[:2]
                     img_upscaled = cv2.resize(img_bgra, (w_cu * 2, h_cu * 2), interpolation=cv2.INTER_LANCZOS4)
                     
-                    # 9. Dual-Layer Hyper-Sharpening (HDR Pop + Large-Radius USM)
+                    # 9. Professional Color-Preserving Hyper-Sharpening (LAB Space)
                     # Split channels to protect the flawless vector Alpha from halo-ringing
                     b_up, g_up, r_up, a_up = cv2.split(img_upscaled)
                     bgr_upscaled = cv2.merge([b_up, g_up, r_up])
                     
-                    # Layer 1: OpenCV HDR Local Detail Enhance (Forces flat areas to pop micro-textures)
-                    bgr_upscaled = cv2.detailEnhance(bgr_upscaled, sigma_s=20, sigma_r=0.15)
+                    # Chuyển đổi sang hệ màu LAB để mài dao điện ĐỘC LẬP trên độ sáng, bảo toàn 100% màu sắc
+                    lab = cv2.cvtColor(bgr_upscaled, cv2.COLOR_BGR2LAB)
+                    l_channel, a_channel, b_channel = cv2.split(lab)
                     
-                    # Layer 2: Extreme Large-Radius Unsharp Mask for THICK lines
-                    # 3x3 kernels are usually invisible on 2048px+ images. We use Sigma 4.0 (~13x13 radius) at 300% Magnitude (3.0)
-                    blurred_bgr = cv2.GaussianBlur(bgr_upscaled, (0, 0), 4.0)
-                    sharpened_bgr = cv2.addWeighted(bgr_upscaled, 3.0, blurred_bgr, -2.0, 0)
+                    # Áp dụng USM Gắt (Bán kính 4.0, Cường độ 2.5) ĐỘC LẬP LÊN KÊNH ÁNH SÁNG L 
+                    blurred_l = cv2.GaussianBlur(l_channel, (0, 0), 4.0)
+                    sharpened_l = cv2.addWeighted(l_channel, 2.5, blurred_l, -1.5, 0)
+                    
+                    # Hợp nhất lại kênh L đã mài gắt với 2 kênh Màu A, B nguyên bản
+                    merged_lab = cv2.merge([sharpened_l, a_channel, b_channel])
+                    sharpened_bgr = cv2.cvtColor(merged_lab, cv2.COLOR_LAB2BGR)
                     
                     # Merge sharpened image back with the untouched perfect Alpha mask
                     sh_b, sh_g, sh_r = cv2.split(sharpened_bgr)
