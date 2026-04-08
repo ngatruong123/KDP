@@ -96,8 +96,8 @@ async def main():
             link_share = f"https://drive.google.com/drive/folders/{job_specific_folder_id}"
 
             # Tạo subfolder _Raw và _Processed trên Drive để backup
-            raw_folder_id = gmanager.create_drive_folder("_Raw", job_specific_folder_id)
-            processed_folder_id = gmanager.create_drive_folder("_Processed", job_specific_folder_id)
+            raw_folder_id, _ = gmanager.create_drive_folder("_Raw", job_specific_folder_id)
+            processed_folder_id, _ = gmanager.create_drive_folder("_Processed", job_specific_folder_id)
 
             # Upload ảnh gốc (raw) vào _Raw để backup
             print(f"📦 Đang backup {len(output_files_paths)} ảnh gốc vào _Raw...")
