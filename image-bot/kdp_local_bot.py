@@ -49,123 +49,242 @@ def process_file(ten_file):
     print(f"🔥 ĐANG CHẶT THỊT TẤM: {ten_file}")
     
     try:
-        # 1. BÓC NỀN
-        print("✂️ [1/3] Đang bóc nền Cực Hạn (Giữ nguyên các lỗ rỗng nội bộ)...")
-        with open(vao, 'rb') as i:
-            # Trực tiếp tắt tính năng Lấp Lỗ Hổng của thư viện
-            output_data = remove(i.read(), session=session, post_process_mask=False) 
-        with open(tam_path, 'wb') as o:
-            o.write(output_data)
-            
-        # [BỔ SUNG NÓNG] - TỰ ĐỘNG NHẬN DIỆN MÀU NỀN + CẠO VIỀN + KHOÉT MÀU NỀN TOÀN BỘ ẢNH
-        print("🪒 Đang Dò Màu Nền và Bắn Laser Đục Thủng toàn bộ pixel cùng màu...")
-        img_goc = cv2.imread(vao, cv2.IMREAD_UNCHANGED)
-        img_tam = cv2.imread(tam_path, cv2.IMREAD_UNCHANGED)
-        if img_goc is not None and img_tam is not None and img_tam.shape[2] == 4:
-            # --- BƯỚC 1: TỰ ĐỘNG DETECT MÀU NỀN TỪ ẢNH GỐC (trước khi rembg cắt) ---
-            h_img, w_img = img_goc.shape[:2]
-            margin = max(5, min(h_img, w_img) // 20)  # Lấy 5% cạnh, tối thiểu 5px
-
-            # Sample pixel ở 4 cạnh viền
-            samples = []
-            samples.extend(img_goc[0:margin, :, :3].reshape(-1, 3).tolist())        # Cạnh trên
-            samples.extend(img_goc[-margin:, :, :3].reshape(-1, 3).tolist())         # Cạnh dưới
-            samples.extend(img_goc[margin:-margin, 0:margin, :3].reshape(-1, 3).tolist())   # Cạnh trái
-            samples.extend(img_goc[margin:-margin, -margin:, :3].reshape(-1, 3).tolist())   # Cạnh phải
-
-            samples_arr = np.array(samples, dtype=np.uint8)
-
-            # Tìm màu chiếm đa số bằng cách gom nhóm (quantize xuống bins thô rồi đếm)
-            quantized = (samples_arr // 16) * 16 + 8  # Gom vào 16 nhóm mỗi kênh
-            # Chuyển thành tuple để đếm
-            from collections import Counter
-            color_counts = Counter([tuple(c) for c in quantized.tolist()])
-            dominant_bgr = np.array(color_counts.most_common(1)[0][0], dtype=np.uint8)
-
-            print(f"   🎨 Màu nền phát hiện (BGR): {dominant_bgr} - Chiếm {color_counts.most_common(1)[0][1]}/{len(samples)} pixel viền")
-
-            # --- BƯỚC 2: TẠO MASK KHOÉT DỰA TRÊN MÀU NỀN DETECT ĐƯỢC ---
-            # Tolerance: cho phép sai lệch ±30 mỗi kênh BGR
-            tolerance = 30
-            lower_bg = np.clip(dominant_bgr.astype(int) - tolerance, 0, 255).astype(np.uint8)
-            upper_bg = np.clip(dominant_bgr.astype(int) + tolerance, 0, 255).astype(np.uint8)
-
-            bgr_only = img_tam[:, :, :3]
-            mask_bg = cv2.inRange(bgr_only, lower_bg, upper_bg)
-
-            # --- BƯỚC 3: CẠO VIỀN + ÁP MASK ---
-            b_c, g_c, r_c, a_c = cv2.split(img_tam)
-
-            # Cạo lẹm ăn sâu vào 2Px bằng lõi Toán Học 5x5
-            kernel = np.ones((5, 5), np.uint8)
-            a_c_eroded = cv2.erode(a_c, kernel, iterations=1)
-            # Chà Nám Mìn (Smooth Blur)
-            a_c_smoothed = cv2.GaussianBlur(a_c_eroded, (3, 3), 0)
-
-            # Khoét Thủng toàn bộ pixel khớp màu nền
-            a_c_smoothed[mask_bg == 255] = 0
-
-            # Dán Trả Lại
-            img_tam_clean = cv2.merge([b_c, g_c, r_c, a_c_smoothed])
-            cv2.imwrite(tam_path, img_tam_clean)
-
-        # 2. XẢ SÚNG BẰNG ĐỘNG CƠ C++ UPSCAYL ĐỘC LẬP (KHÔNG CẦN CHUỘT)
-        print("📈 [2/3] Kích hoạt Động cơ Upscayl C++ Auto (Chạy Kịch Kim X4 Thuận Tự Nhiên)...")
+        # --- BƯỚC 1: UPSCAYL X2 (trên ảnh gốc có nền) ---
+        print("📈 [1/3] Kích hoạt Động cơ Upscayl C++ Auto X2...")
         cmd = [
-            UPSCAYL_ENGINE_PATH, 
-            '-i', tam_path, 
-            '-o', esrgan_out, 
-            '-n', 'realesrgan-x4plus-anime', 
-            '-t', '0',    # Tự động Tiling để tránh nổ Ram VRAM
+            UPSCAYL_ENGINE_PATH,
+            '-i', vao,
+            '-o', esrgan_out,
+            '-n', 'realesr-animevideov3',
+            '-s', '2',
+            '-t', '0',
             '-f', 'png'
-            # (ĐÃ XÓA -s 2 VÌ LỖI MẠNG NHỆN Ô VUÔNG KHI BÓP TIẾN CHÌNH TILING)
         ]
-        
-        # Chạy thả rông để nó Phun thẳng Từng Phần Trăm Tính Toán (10%... 20%...) Ra màn hình 
         result = subprocess.run(cmd, cwd=os.path.dirname(UPSCAYL_ENGINE_PATH))
         if result.returncode != 0:
             print(f"Lỗi văng App Upscayl!")
             print("➡️ Lỗi này có thể do Cạc Đồ Họa Đời Cũ Của Máy Đuối Sức. Sếp chạy lại nhé.")
             return
-        
-        # 3. ÉP MENU MÀU LAB 300 DPI CHUẨN KDP
-        if os.path.exists(esrgan_out):
-            print("⚒️ [3/3] Tráng Nén Ép Lại Kích Thước & Mài Bút L.A.B Chống Đục...")
-            img_upscaled = cv2.imread(esrgan_out, cv2.IMREAD_UNCHANGED)
-            
-            if img_upscaled is not None:
-                # Ảnh hiện tại đang là X4 rát bự, mình tự động Bóp Lại bằng Thuật Toán Nén Nét Area (Siêu Phục Hồi Dữ Liệu)
-                # Bóp về bằng một Nửa (Tức là X2 gốc so với ban đầu)
-                h_bua, w_bua = img_upscaled.shape[:2]
-                img_upscaled = cv2.resize(img_upscaled, (w_bua // 2, h_bua // 2), interpolation=cv2.INTER_AREA)
 
-                b_up, g_up, r_up, a_up = cv2.split(img_upscaled)
-                bgr_upscaled = cv2.merge([b_up, g_up, r_up])
-                lab = cv2.cvtColor(bgr_upscaled, cv2.COLOR_BGR2LAB)
-                str_l, str_a, str_b = cv2.split(lab)
-                blurred_l = cv2.GaussianBlur(str_l, (0, 0), 4.0)
-                sharpened_l = cv2.addWeighted(str_l, 2.5, blurred_l, -1.5, 0)
-                merged_lab = cv2.merge([sharpened_l, str_a, str_b])
-                sharpened_bgr = cv2.cvtColor(merged_lab, cv2.COLOR_LAB2BGR)
-                sh_b, sh_g, sh_r = cv2.split(sharpened_bgr)
-                img_final = cv2.merge([sh_b, sh_g, sh_r, a_up])
-
-                img_in_an = cv2.cvtColor(img_final, cv2.COLOR_BGRA2RGBA)
-                pil_img = Image.fromarray(img_in_an)
-                
-                pil_img.save(ket_qua_path, "PNG", dpi=(300, 300))
-                
-                # Dọn rác
-                os.remove(tam_path)
-                os.remove(esrgan_out)
-                os.remove(vao) # Xóa file gốc luôn cho sạch
-                
-            print(f"🥇 HOÀN TẤT THẦN TỐC TẤM: {ten_file}!")
-        else:
+        if not os.path.exists(esrgan_out):
             print(f"⚠️ Không thấy Cục Output của Upscayl.")
+            return
+
+        # --- BƯỚC 2: SHARPEN LAB ---
+        print("⚒️ [2/3] Mài Bút L.A.B Chống Đục...")
+        img_upscaled = cv2.imread(esrgan_out, cv2.IMREAD_UNCHANGED)
+
+        bgr = img_upscaled[:, :, :3] if img_upscaled.shape[2] >= 3 else img_upscaled
+        lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB)
+        str_l, str_a, str_b = cv2.split(lab)
+        blurred_l = cv2.GaussianBlur(str_l, (0, 0), 3.0)
+        sharpened_l = cv2.addWeighted(str_l, 3.0, blurred_l, -2.0, 0)
+        merged_lab = cv2.merge([sharpened_l, str_a, str_b])
+        img_sharpened = cv2.cvtColor(merged_lab, cv2.COLOR_LAB2BGR)
+        cv2.imwrite(tam_path, img_sharpened)
+
+        # --- BƯỚC 3: TÁCH NỀN (rembg + chroma-key) trên ảnh đã nét ---
+        print("✂️ [3/3] Đang bóc nền trên ảnh đã nét...")
+        img_goc = img_sharpened
+
+        with open(tam_path, 'rb') as i:
+            output_data = remove(i.read(), session=session, post_process_mask=False)
+        rembg_path = os.path.join(THU_MUC_TAM, ten_khong_duoi + '_rembg.png')
+        with open(rembg_path, 'wb') as o:
+            o.write(output_data)
+
+        # Lấy alpha từ rembg, ghép với RGB đã sharpen
+        img_rembg = cv2.imread(rembg_path, cv2.IMREAD_UNCHANGED)
+        if img_rembg is not None and img_rembg.shape[2] == 4:
+            alpha_rembg = img_rembg[:, :, 3]
+            img_result = cv2.merge([img_sharpened[:, :, 0], img_sharpened[:, :, 1], img_sharpened[:, :, 2], alpha_rembg])
+        else:
+            img_result = img_rembg
+
+        # CHROMA-KEY: detect màu nền + xóa triệt để
+        from collections import Counter
+        if img_goc is not None and img_result is not None and img_result.shape[2] == 4:
+            h_img, w_img = img_goc.shape[:2]
+            margin = max(5, min(h_img, w_img) // 20)
+            samples = []
+            samples.extend(img_goc[0:margin, :, :3].reshape(-1, 3).tolist())
+            samples.extend(img_goc[-margin:, :, :3].reshape(-1, 3).tolist())
+            samples.extend(img_goc[margin:-margin, 0:margin, :3].reshape(-1, 3).tolist())
+            samples.extend(img_goc[margin:-margin, -margin:, :3].reshape(-1, 3).tolist())
+            samples_arr = np.array(samples, dtype=np.uint8)
+            quantized = (samples_arr // 16) * 16 + 8
+            color_counts = Counter([tuple(c) for c in quantized.tolist()])
+            dominant_bgr = np.array(color_counts.most_common(1)[0][0], dtype=np.uint8)
+            print(f"   🎨 Màu nền phát hiện (BGR): {dominant_bgr} - Chiếm {color_counts.most_common(1)[0][1]}/{len(samples)} pixel viền")
+
+            # HSV chroma-key
+            dominant_hsv = cv2.cvtColor(dominant_bgr.reshape(1, 1, 3), cv2.COLOR_BGR2HSV)[0][0]
+            img_hsv = cv2.cvtColor(img_result[:, :, :3], cv2.COLOR_BGR2HSV)
+            h_tol, s_tol, v_tol = 15, 60, 60
+            lower_hsv = np.array([max(0, int(dominant_hsv[0]) - h_tol),
+                                  max(0, int(dominant_hsv[1]) - s_tol),
+                                  max(0, int(dominant_hsv[2]) - v_tol)], dtype=np.uint8)
+            upper_hsv = np.array([min(179, int(dominant_hsv[0]) + h_tol),
+                                  min(255, int(dominant_hsv[1]) + s_tol),
+                                  min(255, int(dominant_hsv[2]) + v_tol)], dtype=np.uint8)
+            mask_hsv = cv2.inRange(img_hsv, lower_hsv, upper_hsv)
+
+            bgr_tol = 50
+            lower_bgr = np.clip(dominant_bgr.astype(int) - bgr_tol, 0, 255).astype(np.uint8)
+            upper_bgr = np.clip(dominant_bgr.astype(int) + bgr_tol, 0, 255).astype(np.uint8)
+            mask_bgr = cv2.inRange(img_result[:, :, :3], lower_bgr, upper_bgr)
+
+            mask_bg = cv2.bitwise_or(mask_hsv, mask_bgr)
+
+            b_c, g_c, r_c, a_c = cv2.split(img_result)
+            a_c[mask_bg == 255] = 0
+            img_result = cv2.merge([b_c, g_c, r_c, a_c])
+
+        # Save 300dpi
+        img_rgba = cv2.cvtColor(img_result, cv2.COLOR_BGRA2RGBA)
+        pil_img = Image.fromarray(img_rgba)
+        pil_img.save(ket_qua_path, "PNG", dpi=(300, 300))
+
+        # Dọn rác
+        os.remove(tam_path)
+        os.remove(esrgan_out)
+        if os.path.exists(rembg_path):
+            os.remove(rembg_path)
+        os.remove(vao)
+
+        print(f"🥇 HOÀN TẤT THẦN TỐC TẤM: {ten_file}!")
             
     except Exception as e:
         print(f"❌ Kẹt Trục tại {ten_file} - Lỗi: {e}")
+
+def process_single_image(input_path, output_path):
+    """
+    Hàm xử lý 1 ảnh: rembg → cạo viền + detect nền → upscale x4 → resize x0.5 + sharpen LAB → save 300dpi.
+    Dùng để main.py gọi trực tiếp.
+    """
+    import tempfile, shutil
+
+    ten_file = os.path.basename(input_path)
+    ten_khong_duoi = ten_file.rsplit('.', 1)[0]
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        upscale_input = os.path.join(tmpdir, ten_khong_duoi + '_input.png')
+        esrgan_out = os.path.join(tmpdir, ten_khong_duoi + '_input_out.png')
+        sharpened_path = os.path.join(tmpdir, ten_khong_duoi + '_sharpened.png')
+
+        print(f"\n=====================================")
+        print(f"🔥 ĐANG CHẶT THỊT TẤM: {ten_file}")
+
+        # --- BƯỚC 1: UPSCAYL X4 (trên ảnh gốc có nền) ---
+        print("📈 [1/3] Kích hoạt Động cơ Upscayl C++ Auto X4...")
+        shutil.copy2(input_path, upscale_input)
+        env = os.environ.copy()
+        env["PYTHONUTF8"] = "1"
+        cmd = [
+            UPSCAYL_ENGINE_PATH,
+            '-i', upscale_input,
+            '-o', esrgan_out,
+            '-n', 'realesr-animevideov3',
+            '-s', '2',
+            '-t', '0',
+            '-f', 'png'
+        ]
+        result = subprocess.run(cmd, cwd=os.path.dirname(UPSCAYL_ENGINE_PATH), env=env)
+        if result.returncode != 0:
+            print(f"❌ Lỗi Upscayl! Trả về file gốc.")
+            shutil.copy2(input_path, output_path)
+            return output_path
+
+        if not os.path.exists(esrgan_out):
+            print(f"⚠️ Không thấy output Upscayl.")
+            shutil.copy2(input_path, output_path)
+            return output_path
+
+        # --- BƯỚC 2: SHARPEN LAB ---
+        print("⚒️ [2/3] Mài Bút L.A.B Chống Đục...")
+        img_upscaled = cv2.imread(esrgan_out, cv2.IMREAD_UNCHANGED)
+
+        # Sharpen trên LAB (chỉ kênh L)
+        bgr = img_upscaled[:, :, :3] if img_upscaled.shape[2] >= 3 else img_upscaled
+        lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB)
+        str_l, str_a, str_b = cv2.split(lab)
+        blurred_l = cv2.GaussianBlur(str_l, (0, 0), 3.0)
+        sharpened_l = cv2.addWeighted(str_l, 3.0, blurred_l, -2.0, 0)
+        merged_lab = cv2.merge([sharpened_l, str_a, str_b])
+        img_sharpened = cv2.cvtColor(merged_lab, cv2.COLOR_LAB2BGR)
+        cv2.imwrite(sharpened_path, img_sharpened)
+
+        # --- BƯỚC 3: TÁCH NỀN (rembg + chroma-key) trên ảnh đã nét ---
+        print("✂️ [3/3] Đang bóc nền trên ảnh đã nét...")
+        # Detect màu nền từ ảnh đã sharpen
+        img_goc = img_sharpened  # dùng ảnh sharpened làm gốc detect
+
+        with open(sharpened_path, 'rb') as i:
+            output_data = remove(i.read(), session=session, post_process_mask=False)
+        rembg_path = os.path.join(tmpdir, ten_khong_duoi + '_rembg.png')
+        with open(rembg_path, 'wb') as o:
+            o.write(output_data)
+
+        # Lấy alpha từ rembg, ghép với RGB đã sharpen → giữ nguyên chất lượng màu
+        img_rembg = cv2.imread(rembg_path, cv2.IMREAD_UNCHANGED)
+        if img_rembg is not None and img_rembg.shape[2] == 4:
+            alpha_rembg = img_rembg[:, :, 3]
+            img_result = cv2.merge([img_sharpened[:, :, 0], img_sharpened[:, :, 1], img_sharpened[:, :, 2], alpha_rembg])
+        else:
+            img_result = img_rembg
+
+        # CHROMA-KEY: detect màu nền + xóa triệt để
+        from collections import Counter
+        if img_goc is not None and img_result is not None and img_result.shape[2] == 4:
+            h_img, w_img = img_goc.shape[:2]
+            margin = max(5, min(h_img, w_img) // 20)
+            samples = []
+            samples.extend(img_goc[0:margin, :, :3].reshape(-1, 3).tolist())
+            samples.extend(img_goc[-margin:, :, :3].reshape(-1, 3).tolist())
+            samples.extend(img_goc[margin:-margin, 0:margin, :3].reshape(-1, 3).tolist())
+            samples.extend(img_goc[margin:-margin, -margin:, :3].reshape(-1, 3).tolist())
+            samples_arr = np.array(samples, dtype=np.uint8)
+            quantized = (samples_arr // 16) * 16 + 8
+            color_counts = Counter([tuple(c) for c in quantized.tolist()])
+            dominant_bgr = np.array(color_counts.most_common(1)[0][0], dtype=np.uint8)
+            print(f"   🎨 Màu nền phát hiện (BGR): {dominant_bgr}")
+
+            # HSV chroma-key
+            dominant_hsv = cv2.cvtColor(dominant_bgr.reshape(1, 1, 3), cv2.COLOR_BGR2HSV)[0][0]
+            img_hsv = cv2.cvtColor(img_result[:, :, :3], cv2.COLOR_BGR2HSV)
+            h_tol, s_tol, v_tol = 15, 60, 60
+            lower_hsv = np.array([max(0, int(dominant_hsv[0]) - h_tol),
+                                  max(0, int(dominant_hsv[1]) - s_tol),
+                                  max(0, int(dominant_hsv[2]) - v_tol)], dtype=np.uint8)
+            upper_hsv = np.array([min(179, int(dominant_hsv[0]) + h_tol),
+                                  min(255, int(dominant_hsv[1]) + s_tol),
+                                  min(255, int(dominant_hsv[2]) + v_tol)], dtype=np.uint8)
+            mask_hsv = cv2.inRange(img_hsv, lower_hsv, upper_hsv)
+
+            # BGR backup (±50)
+            bgr_tol = 50
+            lower_bgr = np.clip(dominant_bgr.astype(int) - bgr_tol, 0, 255).astype(np.uint8)
+            upper_bgr = np.clip(dominant_bgr.astype(int) + bgr_tol, 0, 255).astype(np.uint8)
+            mask_bgr = cv2.inRange(img_result[:, :, :3], lower_bgr, upper_bgr)
+
+            mask_bg = cv2.bitwise_or(mask_hsv, mask_bgr)
+
+            # Xóa alpha pixel khớp màu nền, giữ nguyên pixel khác
+            b_c, g_c, r_c, a_c = cv2.split(img_result)
+            a_c[mask_bg == 255] = 0
+            img_result = cv2.merge([b_c, g_c, r_c, a_c])
+
+        # Save 300dpi
+        img_rgba = cv2.cvtColor(img_result, cv2.COLOR_BGRA2RGBA)
+        pil_img = Image.fromarray(img_rgba)
+        pil_img.save(output_path, "PNG", dpi=(300, 300))
+        print(f"🥇 HOÀN TẤT: {ten_file} → {os.path.basename(output_path)}")
+        return output_path
+
+    # Fallback
+    shutil.copy2(input_path, output_path)
+    return output_path
+
 
 if __name__ == "__main__":
     print(f"🚀 BOT AUTO LOCAL ĐÃ BẬT. BỎ ẢNH VÀO '{THU_MUC_GOC}' VÀ ĐỢI THẦN KỲ NHÉ.")

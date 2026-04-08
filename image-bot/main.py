@@ -3,6 +3,8 @@ import asyncio
 import argparse
 from google_api import GoogleManager
 from bot import ImageBotCore
+from kdp_local_bot import process_single_image
+from concurrent.futures import ThreadPoolExecutor
 import shutil
 
 async def main():
@@ -93,10 +95,19 @@ async def main():
             
             link_share = f"https://drive.google.com/drive/folders/{job_specific_folder_id}"
             
-            # Vòng lặp bắn từng ảnh thật lên Drive
-            for file_path in output_files_paths:
-                final_upload_path = file_path
+            # Xử lý song song: upscale + tách nền (2 worker để không quá tải GPU)
+            def _process_one(file_path):
+                processed_path = file_path.rsplit('.', 1)[0] + '_VIP.png'
+                print(f"🔪 Đang xử lý: {os.path.basename(file_path)}...")
+                process_single_image(file_path, processed_path)
+                return processed_path
 
+            print(f"⚡ Xử lý song song {len(output_files_paths)} ảnh (2 luồng)...")
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                processed_paths = list(executor.map(_process_one, output_files_paths))
+
+            # Upload từng ảnh đã xử lý lên Drive
+            for final_upload_path in processed_paths:
                 print(f"✅ Đang xách ảnh {os.path.basename(final_upload_path)} đưa lên Mây (Thư mục nhóm: {job_specific_folder_id})...")
                 gmanager.upload_file_to_drive(final_upload_path, os.path.basename(final_upload_path), job_specific_folder_id)
 
