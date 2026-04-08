@@ -100,8 +100,13 @@ async def main():
             for file_path in output_files_paths:
                 gmanager.upload_file_to_drive(file_path, os.path.basename(file_path), job_specific_folder_id)
 
-            # Tạo subfolder _Processed bên trong
-            processed_folder_id, _ = gmanager.create_drive_folder("_Processed", job_specific_folder_id)
+            # Tìm hoặc tạo subfolder _Processed (chỉ 1 folder duy nhất)
+            query = f"'{job_specific_folder_id}' in parents and name='_Processed' and mimeType='application/vnd.google-apps.folder' and trashed=false"
+            existing = gmanager.drive_service.files().list(q=query, fields="files(id)").execute().get('files', [])
+            if existing:
+                processed_folder_id = existing[0]['id']
+            else:
+                processed_folder_id, _ = gmanager.create_drive_folder("_Processed", job_specific_folder_id)
 
             # Xử lý song song: upscale + tách nền (2 worker)
             def _process_one(file_path):
