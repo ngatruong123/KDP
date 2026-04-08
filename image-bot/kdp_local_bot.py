@@ -144,16 +144,12 @@ def process_file(ten_file):
             a_c[mask_bg == 255] = 0
             img_result = cv2.merge([b_c, g_c, r_c, a_c])
 
-        # MINIMUM + FEATHER: làm mượt viền, xóa răng cưa
-        print("🪄 Đang làm mượt viền (Minimum + Feather)...")
+        # MINIMUM (erode toàn bộ alpha 1px - co viền vào, xóa răng cưa)
+        print("🪄 Đang áp Minimum toàn bộ ảnh...")
         b_f, g_f, r_f, a_f = cv2.split(img_result)
         kernel_min = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-        a_eroded = cv2.erode(a_f, kernel_min, iterations=1)
-        a_blurred = cv2.GaussianBlur(a_eroded, (5, 5), 1.0)
-        edge_mask = (a_eroded > 0) & (a_eroded < 255)
-        a_final = a_eroded.copy()
-        a_final[edge_mask] = a_blurred[edge_mask]
-        img_result = cv2.merge([b_f, g_f, r_f, a_final])
+        a_f = cv2.erode(a_f, kernel_min, iterations=1)
+        img_result = cv2.merge([b_f, g_f, r_f, a_f])
 
         # Save 300dpi
         img_rgba = cv2.cvtColor(img_result, cv2.COLOR_BGRA2RGBA)
