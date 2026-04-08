@@ -83,16 +83,22 @@ async def main():
                     gmanager.update_job_status(row_num, "Lỗi Web Vĩnh Viễn ❌", result_link="Không có ảnh nào tải xuống")
                 continue
 
-            # NẾU CÓ ẢNH THẬT ĐƯỢC TẢI VỀ THÀNH CÔNG TỪ BOT: Khởi tạo Drive
-            output_folder_id = "1yKY-v8gU8O0hbnS4XJc5GU1L2U3oMpKR"
-            link_share = f"https://drive.google.com/drive/folders/{output_folder_id}"
+            # KHỞI TẠO ĐỊNH TUYẾN: CHUẨN BỊ LƯU TRỮ VÀO GOOGLE DRIVE
+            base_output_folder_id = "1yKY-v8gU8O0hbnS4XJc5GU1L2U3oMpKR"
+            
+            # Khởi chạy Thuật toán Truy vết Nguồn gốc Tự động tạo thư mục Out
+            # Ví dụ: Ảnh có nguồn từ Folder "Meo_KDP" => Xây ngay Thư mục "Meo_KDP_Out"
+            print(f"🔍 Đang truy vết Nguồn gốc của ảnh để phân loại thư mục...")
+            job_specific_folder_id = gmanager.resolve_output_folder(id_goc, base_output_folder_id)
+            
+            link_share = f"https://drive.google.com/drive/folders/{job_specific_folder_id}"
             
             # Vòng lặp bắn từng ảnh thật lên Drive
             for file_path in output_files_paths:
                 final_upload_path = file_path
 
-                print(f"✅ Đang xách ảnh {os.path.basename(final_upload_path)} đưa lên Mây (ID: {output_folder_id})...")
-                gmanager.upload_file_to_drive(final_upload_path, os.path.basename(final_upload_path), output_folder_id)
+                print(f"✅ Đang xách ảnh {os.path.basename(final_upload_path)} đưa lên Mây (Thư mục nhóm: {job_specific_folder_id})...")
+                gmanager.upload_file_to_drive(final_upload_path, os.path.basename(final_upload_path), job_specific_folder_id)
 
             # Cập nhật kết quả vào Excel
             gmanager.update_job_status(row_num, "Xong ✅", result_link=link_share)
