@@ -55,7 +55,8 @@ def process_file(ten_file):
             UPSCAYL_ENGINE_PATH,
             '-i', vao,
             '-o', esrgan_out,
-            '-n', 'realesrgan-x4plus',
+            '-n', 'realesr-animevideov3',
+            '-s', '2',
             '-t', '0',
             '-f', 'png'
         ]
@@ -72,9 +73,6 @@ def process_file(ten_file):
         # --- BƯỚC 2: SHARPEN LAB ---
         print("⚒️ [2/3] Mài Bút L.A.B Chống Đục...")
         img_upscaled = cv2.imread(esrgan_out, cv2.IMREAD_UNCHANGED)
-        # X4 → resize x0.5 = X2 gốc
-        h_bua, w_bua = img_upscaled.shape[:2]
-        img_upscaled = cv2.resize(img_upscaled, (w_bua // 2, h_bua // 2), interpolation=cv2.INTER_AREA)
 
         bgr = img_upscaled[:, :, :3] if img_upscaled.shape[2] >= 3 else img_upscaled
         lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB)
@@ -207,7 +205,8 @@ def process_single_image(input_path, output_path):
             UPSCAYL_ENGINE_PATH,
             '-i', upscale_input,
             '-o', esrgan_out,
-            '-n', 'realesrgan-x4plus',
+            '-n', 'realesr-animevideov3',
+            '-s', '2',
             '-t', '0',
             '-f', 'png'
         ]
