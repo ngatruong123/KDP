@@ -26,8 +26,16 @@ def main():
     
     # Kích hoạt venv (nếu chạy qua lệnh này, nó sẽ dùng python trong venv nếu có)
     python_exec = "python3"
-    if os.path.exists("venv/bin/python"):
-        python_exec = "venv/bin/python"
+    if os.name == "nt":
+        # Windows
+        if os.path.exists("venv\\Scripts\\python.exe"):
+            python_exec = "venv\\Scripts\\python.exe"
+        else:
+            python_exec = "python"
+    else:
+        # Mac/Linux
+        if os.path.exists("venv/bin/python"):
+            python_exec = "venv/bin/python"
     
     for acc in accounts:
         log_file = open(f"logs/{acc}.log", "w", encoding="utf-8")

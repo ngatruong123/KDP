@@ -9,7 +9,8 @@ import numpy as np
 
 # Định nghĩa Tọa Độ của File chạy Upscayl C++
 # File này lúc nãy em đã ra lệnh curl tải về thư mục bin/
-UPSCAYL_ENGINE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bin", "realesrgan-ncnn-vulkan")
+_engine_name = "realesrgan-ncnn-vulkan.exe" if os.name == "nt" else "realesrgan-ncnn-vulkan"
+UPSCAYL_ENGINE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bin", _engine_name)
 
 # CÁC THƯ MỤC LÀM VIỆC LƯU TRONG THƯ MỤC CODE LUÔN CHO SẠCH
 WORKSPACE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "kdp_workspace")
