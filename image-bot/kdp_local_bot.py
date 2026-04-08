@@ -147,7 +147,7 @@ def process_file(ten_file):
         # MINIMUM (erode toàn bộ alpha 1px - co viền vào, xóa răng cưa)
         print("🪄 Đang áp Minimum toàn bộ ảnh...")
         b_f, g_f, r_f, a_f = cv2.split(img_result)
-        kernel_min = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
+        kernel_min = np.ones((2, 2), np.uint8)
         a_f = cv2.erode(a_f, kernel_min, iterations=1)
         img_result = cv2.merge([b_f, g_f, r_f, a_f])
 
