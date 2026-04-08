@@ -144,6 +144,17 @@ def process_file(ten_file):
             a_c[mask_bg == 255] = 0
             img_result = cv2.merge([b_c, g_c, r_c, a_c])
 
+        # MINIMUM + FEATHER: làm mượt viền, xóa răng cưa
+        print("🪄 Đang làm mượt viền (Minimum + Feather)...")
+        b_f, g_f, r_f, a_f = cv2.split(img_result)
+        kernel_min = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        a_eroded = cv2.erode(a_f, kernel_min, iterations=1)
+        a_blurred = cv2.GaussianBlur(a_eroded, (5, 5), 1.0)
+        edge_mask = (a_eroded > 0) & (a_eroded < 255)
+        a_final = a_eroded.copy()
+        a_final[edge_mask] = a_blurred[edge_mask]
+        img_result = cv2.merge([b_f, g_f, r_f, a_final])
+
         # Save 300dpi
         img_rgba = cv2.cvtColor(img_result, cv2.COLOR_BGRA2RGBA)
         pil_img = Image.fromarray(img_rgba)
@@ -281,6 +292,21 @@ def process_single_image(input_path, output_path):
             b_c, g_c, r_c, a_c = cv2.split(img_result)
             a_c[mask_bg == 255] = 0
             img_result = cv2.merge([b_c, g_c, r_c, a_c])
+
+        # MINIMUM + FEATHER (như Photoshop): làm mượt viền, xóa răng cưa
+        print("🪄 Đang làm mượt viền (Minimum + Feather)...")
+        b_f, g_f, r_f, a_f = cv2.split(img_result)
+        # Minimum (erode) 1px - co viền vào để cắt bỏ pixel rác ở rìa
+        kernel_min = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        a_eroded = cv2.erode(a_f, kernel_min, iterations=1)
+        # Feather: blur nhẹ CHỈ vùng viền (tạo edge mask rồi blend)
+        a_blurred = cv2.GaussianBlur(a_eroded, (5, 5), 1.0)
+        # Chỉ áp blur ở viền: nơi alpha không phải 0 hoàn toàn và không phải 255 hoàn toàn
+        edge_mask = (a_eroded > 0) & (a_eroded < 255)
+        a_final = a_eroded.copy()
+        a_final[edge_mask] = a_blurred[edge_mask]
+        # Pixel nội bộ (alpha=255) giữ nguyên 255, pixel nền (alpha=0) giữ nguyên 0
+        img_result = cv2.merge([b_f, g_f, r_f, a_final])
 
         # Save 300dpi
         img_rgba = cv2.cvtColor(img_result, cv2.COLOR_BGRA2RGBA)
