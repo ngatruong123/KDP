@@ -78,11 +78,7 @@ def process_file(ten_file):
         img_goc = img_sharpened
 
         with open(tam_path, 'rb') as i:
-            output_data = remove(i.read(), session=session, post_process_mask=False,
-                                 alpha_matting=True,
-                                 alpha_matting_foreground_threshold=240,
-                                 alpha_matting_background_threshold=10,
-                                 alpha_matting_erode_size=10)
+            output_data = remove(i.read(), session=session, post_process_mask=False)
         rembg_path = os.path.join(THU_MUC_TAM, ten_khong_duoi + '_rembg.png')
         with open(rembg_path, 'wb') as o:
             o.write(output_data)
@@ -219,11 +215,7 @@ def process_single_image(input_path, output_path):
         img_goc = img_sharpened
 
         with open(sharpened_path, 'rb') as i:
-            output_data = remove(i.read(), session=session, post_process_mask=False,
-                                 alpha_matting=True,
-                                 alpha_matting_foreground_threshold=240,
-                                 alpha_matting_background_threshold=10,
-                                 alpha_matting_erode_size=10)
+            output_data = remove(i.read(), session=session, post_process_mask=False)
         rembg_path = os.path.join(tmpdir, ten_khong_duoi + '_rembg.png')
         with open(rembg_path, 'wb') as o:
             o.write(output_data)
