@@ -70,21 +70,11 @@ def process_file(ten_file):
             print(f"⚠️ Không thấy Cục Output của Upscayl.")
             return
 
-        # --- BƯỚC 2: SHARPEN LAB ---
-        print("⚒️ [2/3] Mài Bút L.A.B Chống Đục...")
+        # --- BƯỚC 2: TÁCH NỀN (rembg + chroma-key) ---
+        print("✂️ [2/3] Đang bóc nền...")
         img_upscaled = cv2.imread(esrgan_out, cv2.IMREAD_UNCHANGED)
-
-        bgr = img_upscaled[:, :, :3] if img_upscaled.shape[2] >= 3 else img_upscaled
-        lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB)
-        str_l, str_a, str_b = cv2.split(lab)
-        blurred_l = cv2.GaussianBlur(str_l, (0, 0), 2.0)
-        sharpened_l = cv2.addWeighted(str_l, 1.5, blurred_l, -0.5, 0)
-        merged_lab = cv2.merge([sharpened_l, str_a, str_b])
-        img_sharpened = cv2.cvtColor(merged_lab, cv2.COLOR_LAB2BGR)
+        img_sharpened = img_upscaled
         cv2.imwrite(tam_path, img_sharpened)
-
-        # --- BƯỚC 3: TÁCH NỀN (rembg + chroma-key) trên ảnh đã nét ---
-        print("✂️ [3/3] Đang bóc nền trên ảnh đã nét...")
         img_goc = img_sharpened
 
         with open(tam_path, 'rb') as i:
@@ -221,24 +211,12 @@ def process_single_image(input_path, output_path):
             shutil.copy2(input_path, output_path)
             return output_path
 
-        # --- BƯỚC 2: SHARPEN LAB ---
-        print("⚒️ [2/3] Mài Bút L.A.B Chống Đục...")
+        # --- BƯỚC 2: TÁCH NỀN (rembg + chroma-key) ---
+        print("✂️ [2/3] Đang bóc nền...")
         img_upscaled = cv2.imread(esrgan_out, cv2.IMREAD_UNCHANGED)
-
-        # Sharpen trên LAB (chỉ kênh L)
-        bgr = img_upscaled[:, :, :3] if img_upscaled.shape[2] >= 3 else img_upscaled
-        lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB)
-        str_l, str_a, str_b = cv2.split(lab)
-        blurred_l = cv2.GaussianBlur(str_l, (0, 0), 2.0)
-        sharpened_l = cv2.addWeighted(str_l, 1.5, blurred_l, -0.5, 0)
-        merged_lab = cv2.merge([sharpened_l, str_a, str_b])
-        img_sharpened = cv2.cvtColor(merged_lab, cv2.COLOR_LAB2BGR)
+        img_sharpened = img_upscaled
         cv2.imwrite(sharpened_path, img_sharpened)
-
-        # --- BƯỚC 3: TÁCH NỀN (rembg + chroma-key) trên ảnh đã nét ---
-        print("✂️ [3/3] Đang bóc nền trên ảnh đã nét...")
-        # Detect màu nền từ ảnh đã sharpen
-        img_goc = img_sharpened  # dùng ảnh sharpened làm gốc detect
+        img_goc = img_sharpened
 
         with open(sharpened_path, 'rb') as i:
             output_data = remove(i.read(), session=session, post_process_mask=False,
