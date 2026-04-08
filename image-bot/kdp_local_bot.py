@@ -55,8 +55,7 @@ def process_file(ten_file):
             UPSCAYL_ENGINE_PATH,
             '-i', vao,
             '-o', esrgan_out,
-            '-n', 'realesr-animevideov3',
-            '-s', '2',
+            '-n', 'realesrgan-x4plus',
             '-t', '0',
             '-f', 'png'
         ]
@@ -73,12 +72,15 @@ def process_file(ten_file):
         # --- BƯỚC 2: SHARPEN LAB ---
         print("⚒️ [2/3] Mài Bút L.A.B Chống Đục...")
         img_upscaled = cv2.imread(esrgan_out, cv2.IMREAD_UNCHANGED)
+        # X4 → resize x0.5 = X2 gốc
+        h_bua, w_bua = img_upscaled.shape[:2]
+        img_upscaled = cv2.resize(img_upscaled, (w_bua // 2, h_bua // 2), interpolation=cv2.INTER_AREA)
 
         bgr = img_upscaled[:, :, :3] if img_upscaled.shape[2] >= 3 else img_upscaled
         lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB)
         str_l, str_a, str_b = cv2.split(lab)
-        blurred_l = cv2.GaussianBlur(str_l, (0, 0), 3.0)
-        sharpened_l = cv2.addWeighted(str_l, 3.0, blurred_l, -2.0, 0)
+        blurred_l = cv2.GaussianBlur(str_l, (0, 0), 2.0)
+        sharpened_l = cv2.addWeighted(str_l, 1.5, blurred_l, -0.5, 0)
         merged_lab = cv2.merge([sharpened_l, str_a, str_b])
         img_sharpened = cv2.cvtColor(merged_lab, cv2.COLOR_LAB2BGR)
         cv2.imwrite(tam_path, img_sharpened)
@@ -205,8 +207,7 @@ def process_single_image(input_path, output_path):
             UPSCAYL_ENGINE_PATH,
             '-i', upscale_input,
             '-o', esrgan_out,
-            '-n', 'realesr-animevideov3',
-            '-s', '2',
+            '-n', 'realesrgan-x4plus',
             '-t', '0',
             '-f', 'png'
         ]
@@ -229,8 +230,8 @@ def process_single_image(input_path, output_path):
         bgr = img_upscaled[:, :, :3] if img_upscaled.shape[2] >= 3 else img_upscaled
         lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB)
         str_l, str_a, str_b = cv2.split(lab)
-        blurred_l = cv2.GaussianBlur(str_l, (0, 0), 3.0)
-        sharpened_l = cv2.addWeighted(str_l, 3.0, blurred_l, -2.0, 0)
+        blurred_l = cv2.GaussianBlur(str_l, (0, 0), 2.0)
+        sharpened_l = cv2.addWeighted(str_l, 1.5, blurred_l, -0.5, 0)
         merged_lab = cv2.merge([sharpened_l, str_a, str_b])
         img_sharpened = cv2.cvtColor(merged_lab, cv2.COLOR_LAB2BGR)
         cv2.imwrite(sharpened_path, img_sharpened)
