@@ -25,9 +25,9 @@ os.makedirs(THU_MUC_UPSCAYLED, exist_ok=True)
 os.makedirs(THU_MUC_THANH_PHAM, exist_ok=True)
 
 # Khởi động não Lột Nền
-print("🚀 Khởi động Lưỡi Dao Cắt Nền (U2-Net - Nhổ Tận Lỗ Nách)...")
+print("🚀 Khởi động Lưỡi Dao Cắt Nền (ISNet - Viền Mượt Không Răng Cưa)...")
 try:
-    session = new_session("u2net")
+    session = new_session("isnet-general-use")
 except Exception as e:
     print(f"Lỗi nạp não Rembg: {e}. Vui lòng cài lại qua pip install rembg[gpu] onnxruntime-silicon")
     exit()
@@ -88,7 +88,11 @@ def process_file(ten_file):
         img_goc = img_sharpened
 
         with open(tam_path, 'rb') as i:
-            output_data = remove(i.read(), session=session, post_process_mask=False)
+            output_data = remove(i.read(), session=session, post_process_mask=False,
+                                 alpha_matting=True,
+                                 alpha_matting_foreground_threshold=240,
+                                 alpha_matting_background_threshold=10,
+                                 alpha_matting_erode_size=10)
         rembg_path = os.path.join(THU_MUC_TAM, ten_khong_duoi + '_rembg.png')
         with open(rembg_path, 'wb') as o:
             o.write(output_data)
@@ -220,7 +224,11 @@ def process_single_image(input_path, output_path):
         img_goc = img_sharpened  # dùng ảnh sharpened làm gốc detect
 
         with open(sharpened_path, 'rb') as i:
-            output_data = remove(i.read(), session=session, post_process_mask=False)
+            output_data = remove(i.read(), session=session, post_process_mask=False,
+                                 alpha_matting=True,
+                                 alpha_matting_foreground_threshold=240,
+                                 alpha_matting_background_threshold=10,
+                                 alpha_matting_erode_size=10)
         rembg_path = os.path.join(tmpdir, ten_khong_duoi + '_rembg.png')
         with open(rembg_path, 'wb') as o:
             o.write(output_data)
