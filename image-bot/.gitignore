@@ -1,0 +1,10 @@
+.env
+venv/
+__pycache__/
+chrome_profile*/
+inputs_temp*/
+outputs_temp*/
+kdp_workspace/
+logs/
+bin/
+config/
