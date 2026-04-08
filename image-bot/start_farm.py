@@ -39,8 +39,11 @@ def main():
     
     for acc in accounts:
         log_file = open(f"logs/{acc}.log", "w", encoding="utf-8")
-        
+
         # Thêm cờ -u (unbuffered) để ép hệ thống Python nhả ngay lập tức Text ra File, không bị trắng trơn Log.
+        # PYTHONUTF8=1 ép Python dùng UTF-8 thay vì cp1252 trên Windows (fix lỗi emoji)
+        env = os.environ.copy()
+        env["PYTHONUTF8"] = "1"
         cmd = [python_exec, "-u", "main.py", "--acc", acc]
         if args.headless:
             cmd.append("--headless")
@@ -48,7 +51,7 @@ def main():
         print(f"👉 Khởi động Luồng [ {acc} ] -> Xem nhật ký tại: logs/{acc}.log")
         
         # Chạy ngầm tiến trình (Non-blocking)
-        p = subprocess.Popen(cmd, stdout=log_file, stderr=log_file)
+        p = subprocess.Popen(cmd, stdout=log_file, stderr=log_file, env=env)
         processes.append((acc, p, log_file))
         
         # Để các acc không tranh nhau gọi Google API cùng một tíc tắc gây quá tải lúc khởi động
