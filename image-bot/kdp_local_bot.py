@@ -121,24 +121,34 @@ def process_file(ten_file):
             dominant_bgr = np.array(color_counts.most_common(1)[0][0], dtype=np.uint8)
             print(f"   🎨 Màu nền phát hiện (BGR): {dominant_bgr} - Chiếm {color_counts.most_common(1)[0][1]}/{len(samples)} pixel viền")
 
-            # HSV chroma-key
-            dominant_hsv = cv2.cvtColor(dominant_bgr.reshape(1, 1, 3), cv2.COLOR_BGR2HSV)[0][0]
-            img_hsv = cv2.cvtColor(img_result[:, :, :3], cv2.COLOR_BGR2HSV)
-            h_tol, s_tol, v_tol = 15, 60, 60
-            lower_hsv = np.array([max(0, int(dominant_hsv[0]) - h_tol),
-                                  max(0, int(dominant_hsv[1]) - s_tol),
-                                  max(0, int(dominant_hsv[2]) - v_tol)], dtype=np.uint8)
-            upper_hsv = np.array([min(179, int(dominant_hsv[0]) + h_tol),
-                                  min(255, int(dominant_hsv[1]) + s_tol),
-                                  min(255, int(dominant_hsv[2]) + v_tol)], dtype=np.uint8)
-            mask_hsv = cv2.inRange(img_hsv, lower_hsv, upper_hsv)
+            # Chroma-key: nền tối dùng BGR chặt, nền sáng dùng HSV+BGR
+            is_dark_bg = int(dominant_bgr.mean()) < 60
 
-            bgr_tol = 50
-            lower_bgr = np.clip(dominant_bgr.astype(int) - bgr_tol, 0, 255).astype(np.uint8)
-            upper_bgr = np.clip(dominant_bgr.astype(int) + bgr_tol, 0, 255).astype(np.uint8)
-            mask_bgr = cv2.inRange(img_result[:, :, :3], lower_bgr, upper_bgr)
+            if is_dark_bg:
+                # Nền tối: chỉ dùng BGR tolerance chặt (±25) vì HSV không đáng tin ở vùng tối
+                bgr_tol = 25
+                lower_bgr = np.clip(dominant_bgr.astype(int) - bgr_tol, 0, 255).astype(np.uint8)
+                upper_bgr = np.clip(dominant_bgr.astype(int) + bgr_tol, 0, 255).astype(np.uint8)
+                mask_bg = cv2.inRange(img_result[:, :, :3], lower_bgr, upper_bgr)
+            else:
+                # Nền sáng: HSV + BGR
+                dominant_hsv = cv2.cvtColor(dominant_bgr.reshape(1, 1, 3), cv2.COLOR_BGR2HSV)[0][0]
+                img_hsv = cv2.cvtColor(img_result[:, :, :3], cv2.COLOR_BGR2HSV)
+                h_tol, s_tol, v_tol = 15, 50, 50
+                lower_hsv = np.array([max(0, int(dominant_hsv[0]) - h_tol),
+                                      max(0, int(dominant_hsv[1]) - s_tol),
+                                      max(0, int(dominant_hsv[2]) - v_tol)], dtype=np.uint8)
+                upper_hsv = np.array([min(179, int(dominant_hsv[0]) + h_tol),
+                                      min(255, int(dominant_hsv[1]) + s_tol),
+                                      min(255, int(dominant_hsv[2]) + v_tol)], dtype=np.uint8)
+                mask_hsv = cv2.inRange(img_hsv, lower_hsv, upper_hsv)
 
-            mask_bg = cv2.bitwise_or(mask_hsv, mask_bgr)
+                bgr_tol = 40
+                lower_bgr = np.clip(dominant_bgr.astype(int) - bgr_tol, 0, 255).astype(np.uint8)
+                upper_bgr = np.clip(dominant_bgr.astype(int) + bgr_tol, 0, 255).astype(np.uint8)
+                mask_bgr = cv2.inRange(img_result[:, :, :3], lower_bgr, upper_bgr)
+
+                mask_bg = cv2.bitwise_or(mask_hsv, mask_bgr)
 
             b_c, g_c, r_c, a_c = cv2.split(img_result)
             a_c[mask_bg == 255] = 0
@@ -289,20 +299,12 @@ def process_single_image(input_path, output_path):
             a_c[mask_bg == 255] = 0
             img_result = cv2.merge([b_c, g_c, r_c, a_c])
 
-        # MINIMUM + FEATHER (như Photoshop): làm mượt viền, xóa răng cưa
-        print("🪄 Đang làm mượt viền (Minimum + Feather)...")
+        # MINIMUM (erode toàn bộ alpha ~0.5px - co viền vào, xóa răng cưa)
+        print("🪄 Đang áp Minimum toàn bộ ảnh...")
         b_f, g_f, r_f, a_f = cv2.split(img_result)
-        # Minimum (erode) 1px - co viền vào để cắt bỏ pixel rác ở rìa
-        kernel_min = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-        a_eroded = cv2.erode(a_f, kernel_min, iterations=1)
-        # Feather: blur nhẹ CHỈ vùng viền (tạo edge mask rồi blend)
-        a_blurred = cv2.GaussianBlur(a_eroded, (5, 5), 1.0)
-        # Chỉ áp blur ở viền: nơi alpha không phải 0 hoàn toàn và không phải 255 hoàn toàn
-        edge_mask = (a_eroded > 0) & (a_eroded < 255)
-        a_final = a_eroded.copy()
-        a_final[edge_mask] = a_blurred[edge_mask]
-        # Pixel nội bộ (alpha=255) giữ nguyên 255, pixel nền (alpha=0) giữ nguyên 0
-        img_result = cv2.merge([b_f, g_f, r_f, a_final])
+        kernel_min = np.ones((2, 2), np.uint8)
+        a_f = cv2.erode(a_f, kernel_min, iterations=1)
+        img_result = cv2.merge([b_f, g_f, r_f, a_f])
 
         # Save 300dpi
         img_rgba = cv2.cvtColor(img_result, cv2.COLOR_BGRA2RGBA)
