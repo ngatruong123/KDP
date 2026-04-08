@@ -95,11 +95,10 @@ async def main():
             
             link_share = f"https://drive.google.com/drive/folders/{job_specific_folder_id}"
 
-            # Tạo subfolder _Raw và _Processed trên Drive để backup
+            # Tạo subfolder _Raw bên trong output folder để backup ảnh gốc
             raw_folder_id, _ = gmanager.create_drive_folder("_Raw", job_specific_folder_id)
-            processed_folder_id, _ = gmanager.create_drive_folder("_Processed", job_specific_folder_id)
 
-            # Upload ảnh gốc (raw) vào _Raw để backup
+            # Upload ảnh gốc vào _Raw
             print(f"📦 Đang backup {len(output_files_paths)} ảnh gốc vào _Raw...")
             for file_path in output_files_paths:
                 gmanager.upload_file_to_drive(file_path, os.path.basename(file_path), raw_folder_id)
@@ -115,10 +114,13 @@ async def main():
             with ThreadPoolExecutor(max_workers=2) as executor:
                 processed_paths = list(executor.map(_process_one, output_files_paths))
 
-            # Upload ảnh đã xử lý vào _Processed
+            # Upload ảnh đã xử lý vào folder chính (cùng cấp với _Raw)
             for final_upload_path in processed_paths:
                 print(f"✅ Đang xách ảnh {os.path.basename(final_upload_path)} đưa lên Mây...")
-                gmanager.upload_file_to_drive(final_upload_path, os.path.basename(final_upload_path), processed_folder_id)
+                gmanager.upload_file_to_drive(final_upload_path, os.path.basename(final_upload_path), job_specific_folder_id)
+
+            # Link sheet trỏ thẳng vào folder chứa ảnh đã xử lý
+            link_share = f"https://drive.google.com/drive/folders/{job_specific_folder_id}"
 
             # Cập nhật kết quả vào Excel
             gmanager.update_job_status(row_num, "Xong ✅", result_link=link_share)
