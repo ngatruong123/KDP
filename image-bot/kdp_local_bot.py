@@ -139,30 +139,20 @@ def _color_bleed_and_upscale(img_bgra):
 # ════════════════════════════════════════════════════════════════
 
 def _detect_bg_range(img):
-    """Đo chính xác range [min, max] per-channel của pixel nền từ 4 góc.
-    Trả về (lower, upper, bg_color): range thật 100% của nền, không đoán tolerance."""
+    """Đo range [min, max] per-channel của pixel nền từ 4 góc.
+    Dùng percentile 1%-99% để loại outlier (design lọt vào góc) mà vẫn bắt hết noise JPEG."""
     h, w = img.shape[:2]
     cs = max(8, min(h, w) // 15)
     tl = img[0:cs, 0:cs, :3].reshape(-1, 3)
     tr = img[0:cs, -cs:, :3].reshape(-1, 3)
     bl = img[-cs:, 0:cs, :3].reshape(-1, 3)
     br = img[-cs:, -cs:, :3].reshape(-1, 3)
-    samples = np.concatenate([tl, tr, bl, br], axis=0)
+    samples = np.concatenate([tl, tr, bl, br], axis=0).astype(np.float32)
 
-    # Lọc outlier: chỉ lấy pixel trong nhóm dominant (loại bỏ nếu góc có chi tiết design)
-    quantized = (samples // 16).astype(np.uint32)
-    packed = (quantized[:, 0] << 16) | (quantized[:, 1] << 8) | quantized[:, 2]
-    values, counts = np.unique(packed, return_counts=True)
-    dominant_packed = values[counts.argmax()]
-
-    # Chỉ giữ pixel thuộc nhóm dominant (cùng bucket 16x16x16)
-    dominant_mask = packed == dominant_packed
-    dominant_samples = samples[dominant_mask]
-
-    # Range thật per-channel: min và max thực tế của pixel nền
-    lower = dominant_samples.min(axis=0).astype(np.uint8)
-    upper = dominant_samples.max(axis=0).astype(np.uint8)
-    bg_color = dominant_samples.mean(axis=0).astype(np.uint8)
+    # Percentile 1%-99% per channel — loại outlier, giữ hết noise JPEG
+    lower = np.percentile(samples, 1, axis=0).astype(np.uint8)
+    upper = np.percentile(samples, 99, axis=0).astype(np.uint8)
+    bg_color = np.median(samples, axis=0).astype(np.uint8)
 
     return lower, upper, bg_color
 
