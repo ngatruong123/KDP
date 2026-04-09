@@ -56,33 +56,23 @@ def _detect_bg_color(img_bgr):
     return dominant_bgr, ratio
 
 
-def _chroma_key(img_bgra, dominant_bgr):
-    """Xóa pixel khớp màu nền khỏi alpha channel. Trả về img_bgra đã clean."""
-    is_dark_bg = int(dominant_bgr.mean()) < 60
+def _chroma_key(img_bgra, dominant_bgr, delta_e_threshold=20):
+    """
+    Xóa pixel khớp màu nền bằng LAB ΔE (khoảng cách màu theo mắt người).
+    ΔE < threshold → coi là nền → xóa alpha.
+    Mặc định threshold=20: cắt sạch nền, giữ chi tiết gần màu nền.
+    """
+    # Chuyển ảnh và màu nền sang LAB
+    img_lab = cv2.cvtColor(img_bgra[:, :, :3], cv2.COLOR_BGR2LAB).astype(np.float32)
+    bg_lab = cv2.cvtColor(dominant_bgr.reshape(1, 1, 3), cv2.COLOR_BGR2LAB).astype(np.float32)[0][0]
 
-    if is_dark_bg:
-        bgr_tol = 25
-        lower_bgr = np.clip(dominant_bgr.astype(int) - bgr_tol, 0, 255).astype(np.uint8)
-        upper_bgr = np.clip(dominant_bgr.astype(int) + bgr_tol, 0, 255).astype(np.uint8)
-        mask_bg = cv2.inRange(img_bgra[:, :, :3], lower_bgr, upper_bgr)
-    else:
-        dominant_hsv = cv2.cvtColor(dominant_bgr.reshape(1, 1, 3), cv2.COLOR_BGR2HSV)[0][0]
-        img_hsv = cv2.cvtColor(img_bgra[:, :, :3], cv2.COLOR_BGR2HSV)
-        h_tol, s_tol, v_tol = 15, 50, 50
-        lower_hsv = np.array([max(0, int(dominant_hsv[0]) - h_tol),
-                              max(0, int(dominant_hsv[1]) - s_tol),
-                              max(0, int(dominant_hsv[2]) - v_tol)], dtype=np.uint8)
-        upper_hsv = np.array([min(179, int(dominant_hsv[0]) + h_tol),
-                              min(255, int(dominant_hsv[1]) + s_tol),
-                              min(255, int(dominant_hsv[2]) + v_tol)], dtype=np.uint8)
-        mask_hsv = cv2.inRange(img_hsv, lower_hsv, upper_hsv)
+    # Tính ΔE cho mỗi pixel: sqrt((L1-L2)² + (a1-a2)² + (b1-b2)²)
+    diff = img_lab - bg_lab
+    delta_e = np.sqrt(np.sum(diff ** 2, axis=2))
 
-        bgr_tol = 40
-        lower_bgr = np.clip(dominant_bgr.astype(int) - bgr_tol, 0, 255).astype(np.uint8)
-        upper_bgr = np.clip(dominant_bgr.astype(int) + bgr_tol, 0, 255).astype(np.uint8)
-        mask_bgr = cv2.inRange(img_bgra[:, :, :3], lower_bgr, upper_bgr)
-
-        mask_bg = cv2.bitwise_or(mask_hsv, mask_bgr)
+    # Pixel có ΔE < threshold → nền → xóa alpha
+    mask_bg = (delta_e < delta_e_threshold).astype(np.uint8) * 255
+    print(f"   🔬 LAB ΔE threshold={delta_e_threshold} — {np.count_nonzero(mask_bg)}/{mask_bg.size} pixel bị cắt ({np.count_nonzero(mask_bg)*100//mask_bg.size}%)")
 
     b_c, g_c, r_c, a_c = cv2.split(img_bgra)
     a_c[mask_bg == 255] = 0
