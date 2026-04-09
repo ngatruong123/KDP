@@ -289,11 +289,12 @@ def process_single_image(input_path, output_path):
             _save_300dpi(final, output_path)
             print(f"🥇 HOÀN TẤT: {ten_file} → {os.path.basename(output_path)}")
             return output_path
+        else:
+            print(f"❌ THẤT BẠI: {ten_file} — _process_core trả về None")
+            return None
     except Exception as e:
-        print(f"❌ Lỗi tại {ten_file}: {e}")
-
-    shutil.copy2(input_path, output_path)
-    return output_path
+        print(f"❌ THẤT BẠI: {ten_file} — {e}")
+        return None
 
 
 if __name__ == "__main__":

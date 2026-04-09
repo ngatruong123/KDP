@@ -116,13 +116,19 @@ async def main():
             else:
                 processed_folder_id, _ = gmanager.create_drive_folder("_Processed", job_specific_folder_id)
 
-            # Xử lý song song: upscale + tách nền (2 process)
+            # Xử lý song song: upscale + tách nền (2 thread)
             process_args = [(fp, fp.rsplit('.', 1)[0] + '_VIP.png') for fp in output_files_paths]
             print(f"⚡ Xử lý song song {len(output_files_paths)} ảnh (2 thread)...")
             with ThreadPoolExecutor(max_workers=2) as executor:
-                processed_paths = list(executor.map(_process_one, process_args))
+                raw_results = list(executor.map(_process_one, process_args))
 
-            # Upload ảnh đã xử lý vào _Processed
+            # Lọc bỏ file thất bại (None) — KHÔNG upload ảnh chưa cắt nền
+            processed_paths = [p for p in raw_results if p is not None and os.path.exists(p)]
+            failed_count = len(raw_results) - len(processed_paths)
+            if failed_count > 0:
+                print(f"⚠️ {failed_count}/{len(raw_results)} ảnh xử lý THẤT BẠI — bỏ qua, KHÔNG upload ảnh lỗi")
+
+            # Upload CHỈ ảnh đã xử lý thành công vào _Processed
             for final_upload_path in processed_paths:
                 print(f"✅ Đang xách ảnh {os.path.basename(final_upload_path)} đưa lên Mây...")
                 gmanager.upload_file_to_drive(final_upload_path, os.path.basename(final_upload_path), processed_folder_id)
@@ -130,13 +136,18 @@ async def main():
             # Link sheet trỏ vào _Processed
             link_share = f"https://drive.google.com/drive/folders/{processed_folder_id}"
 
-            # Cập nhật kết quả vào Excel
-            gmanager.update_job_status(row_num, "Xong ✅", result_link=link_share)
-            print(f"🎉 SUẤT XẮC! Ảnh ĐÃ VÀO DRIVE THẬT 100%. Link tải: {link_share}")
+            # Cập nhật kết quả
+            if len(processed_paths) > 0:
+                gmanager.update_job_status(row_num, "Xong ✅", result_link=link_share)
+                print(f"🎉 HOÀN TẤT! {len(processed_paths)} ảnh đã lên Drive. Link: {link_share}")
+            else:
+                gmanager.update_job_status(row_num, "Lỗi Xử Lý Ảnh ❌", result_link="Không có ảnh nào xử lý thành công")
+                print(f"❌ TOÀN BỘ ảnh xử lý thất bại cho dòng {row_num}")
 
             # Cleanup temp files
-            for f in output_files_paths + processed_paths:
-                if os.path.exists(f):
+            all_temps = output_files_paths + processed_paths
+            for f in all_temps:
+                if f and os.path.exists(f):
                     os.remove(f)
             if os.path.exists(input_path):
                 os.remove(input_path)
