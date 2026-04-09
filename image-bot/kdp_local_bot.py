@@ -56,12 +56,11 @@ def _detect_bg_color(img_bgr):
     return dominant_bgr, ratio
 
 
-def _chroma_key(img_bgra, dominant_bgr, hard_threshold=25, soft_threshold=35):
+def _chroma_key(img_bgra, dominant_bgr):
     """
-    Xóa pixel khớp màu nền bằng LAB ΔE + alpha mềm cho viền.
-    ΔE < hard_threshold → alpha = 0 (xóa hoàn toàn)
-    ΔE hard~soft → alpha giảm dần (viền mượt, không dính nền)
-    ΔE > soft_threshold → giữ nguyên
+    2 lớp xử lý:
+    1) Toàn ảnh: ΔE < 12 → xóa (chỉ pixel gần giống 100% nền)
+    2) Viền: tìm rìa alpha, clean thêm 2px quanh viền với ΔE < 30
     """
     img_lab = cv2.cvtColor(img_bgra[:, :, :3], cv2.COLOR_BGR2LAB).astype(np.float32)
     bg_lab = cv2.cvtColor(dominant_bgr.reshape(1, 1, 3), cv2.COLOR_BGR2LAB).astype(np.float32)[0][0]
@@ -70,22 +69,32 @@ def _chroma_key(img_bgra, dominant_bgr, hard_threshold=25, soft_threshold=35):
     delta_e = np.sqrt(np.sum(diff ** 2, axis=2))
 
     b_c, g_c, r_c, a_c = cv2.split(img_bgra)
+
+    # Lớp 1: toàn ảnh — chỉ cắt pixel rất giống nền (ΔE < 12)
+    global_mask = delta_e < 12
+    a_c[global_mask] = 0
+    global_count = np.count_nonzero(global_mask)
+
+    # Lớp 2: tìm rìa alpha (biên giữa transparent và opaque)
+    alpha_binary = (a_c > 0).astype(np.uint8) * 255
+    kernel_edge = np.ones((5, 5), np.uint8)  # 2px quanh viền
+    dilated = cv2.dilate(alpha_binary, kernel_edge, iterations=1)
+    eroded = cv2.erode(alpha_binary, kernel_edge, iterations=1)
+    edge_band = cv2.subtract(dilated, eroded)  # vùng 2px quanh viền
+
+    # Trong vùng viền: cắt mạnh hơn (ΔE < 30) + fade
+    edge_zone = edge_band > 0
+    edge_and_bg = edge_zone & (delta_e < 30)
+    # Fade: ΔE gần 0 → alpha=0, ΔE gần 30 → giữ nguyên
+    fade_mask = edge_zone & (delta_e >= 12) & (delta_e < 30)
     a_float = a_c.astype(np.float32)
-
-    # Hard cut: ΔE < hard → alpha = 0
-    a_float[delta_e < hard_threshold] = 0
-
-    # Soft transition: hard ≤ ΔE < soft → alpha giảm dần
-    transition = (delta_e >= hard_threshold) & (delta_e < soft_threshold)
-    fade = (delta_e[transition] - hard_threshold) / (soft_threshold - hard_threshold)
-    a_float[transition] = a_float[transition] * fade
-
+    a_float[edge_and_bg & (delta_e < 12)] = 0
+    fade_factor = (delta_e[fade_mask] - 12) / (30 - 12)
+    a_float[fade_mask] = a_float[fade_mask] * fade_factor
     a_c = np.clip(a_float, 0, 255).astype(np.uint8)
 
-    hard_count = np.count_nonzero(delta_e < hard_threshold)
-    soft_count = np.count_nonzero(transition)
-    total = delta_e.size
-    print(f"   🔬 LAB ΔE: {hard_count} pixel xóa hẳn + {soft_count} pixel fade viền ({(hard_count+soft_count)*100//total}% tổng)")
+    edge_count = np.count_nonzero(edge_and_bg)
+    print(f"   🔬 LAB ΔE: {global_count} pixel nền xóa + {edge_count} pixel viền clean")
 
     return cv2.merge([b_c, g_c, r_c, a_c])
 
