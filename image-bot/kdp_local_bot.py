@@ -98,7 +98,7 @@ def _remove_bg(img_sharpened, sharpened_path, dominant_bgr, bg_ratio):
     Tách nền: nếu nền đơn sắc rõ (>70% viền) → chỉ dùng chroma-key (skip rembg).
     Ngược lại → rembg + chroma-key.
     """
-    if bg_ratio >= 0.50:
+    if bg_ratio >= 0.25:
         # Nền đơn sắc rõ ràng → chroma-key trực tiếp, KHÔNG cần rembg
         print(f"   🟢 Nền đơn sắc ({bg_ratio:.0%} viền khớp) → chỉ dùng Chroma-Key (bỏ qua rembg)")
         h, w = img_sharpened.shape[:2]
