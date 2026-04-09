@@ -38,10 +38,14 @@ _ENV["PYTHONUTF8"] = "1"
 # ════════════════════════════════════════════════════════════════
 
 
-def _minimum_edges(img_bgra):
-    """Minimum 1px (Photoshop) trên viền NGOÀI — mượt viền rembg, không đụng bên trong."""
+def _minimum_05px(img_bgra):
+    """Minimum 0.5px (như Photoshop): resize alpha 2x → erode 1px → resize về."""
+    alpha = img_bgra[:, :, 3]
+    h, w = alpha.shape
+    alpha_2x = cv2.resize(alpha, (w * 2, h * 2), interpolation=cv2.INTER_NEAREST)
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-    img_bgra[:, :, 3] = cv2.erode(img_bgra[:, :, 3], kernel, iterations=1)
+    alpha_2x = cv2.erode(alpha_2x, kernel, iterations=1)
+    img_bgra[:, :, 3] = cv2.resize(alpha_2x, (w, h), interpolation=cv2.INTER_AREA)
     return img_bgra
 
 
@@ -162,8 +166,8 @@ def _process_core(input_path):
     """Pipeline cho ảnh nền đơn sắc:
     1. Detect range màu nền thật từ 4 góc
     2. rembg → alpha mask, giữ RGB gốc
-    3. Minimum 1px (mượt viền ngoài)
-    4. Xoá mọi pixel RGB trong range nền (100% chính xác, không phóng to lỗ)
+    3. Xoá mọi pixel RGB trong range nền (100% chính xác)
+    4. Minimum 0.5px (mượt viền sau cắt, như Photoshop)
     5. Inpaint color bleed + AI Upscale x4→x2
     """
     img_data = np.fromfile(input_path, dtype=np.uint8)
@@ -193,13 +197,13 @@ def _process_core(input_path):
     b_goc, g_goc, r_goc = cv2.split(img_goc[:, :, :3])
     transparent = cv2.merge([b_goc, g_goc, r_goc, transparent[:, :, 3]])
 
-    # ── BƯỚC 3: MINIMUM 1px — mượt viền rembg ──
-    print("⛏️ [2/5] Minimum 1px (mượt viền)...")
-    transparent = _minimum_edges(transparent)
-
-    # ── BƯỚC 4: XOÁ NỀN ĐƠN SẮC (sau Minimum để lỗ trong không bị phóng to) ──
-    print(f"🔫 [3/5] Xoá pixel nền [{lower}]-[{upper}]...")
+    # ── BƯỚC 3: XOÁ NỀN ĐƠN SẮC ──
+    print(f"🔫 [2/5] Xoá pixel nền [{lower}]-[{upper}]...")
     transparent = _remove_bg_pixels(transparent, lower, upper)
+
+    # ── BƯỚC 4: MINIMUM 0.5px — mượt viền sau cắt ──
+    print("⛏️ [3/5] Minimum 0.5px (mượt viền)...")
+    transparent = _minimum_05px(transparent)
 
     # ── BƯỚC 5: INPAINT COLOR BLEED + AI UPSCALE ──
     print("📈 [4/5] Color Bleed & Upscale AI x4→x2...")
