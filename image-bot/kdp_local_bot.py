@@ -95,20 +95,24 @@ def _chroma_key(img_bgra, dominant_bgr):
     edge_count = np.count_nonzero(edge_and_bg)
 
     # === 4. Despill — trừ màu nền khỏi RGB toàn bộ pixel còn sống ===
+    # Pixel gần màu nền → trừ mạnh, pixel xa → trừ ít/không trừ
     alive = a_c > 0
     if np.any(alive):
-        despill_strength = np.clip(1.0 - (delta_e / 80.0), 0, 1)
-        bg_float = dominant_bgr.astype(np.float32)
-        for ch_idx, ch in enumerate([b_c, g_c, r_c]):
-            ch_float = ch.astype(np.float32)
-            corrected = ch_float - (bg_float[ch_idx] * despill_strength * 0.7)
-            ch_float[alive] = corrected[alive]
-            if ch_idx == 0:
-                b_c = np.clip(ch_float, 0, 255).astype(np.uint8)
-            elif ch_idx == 1:
-                g_c = np.clip(ch_float, 0, 255).astype(np.uint8)
-            else:
-                r_c = np.clip(ch_float, 0, 255).astype(np.uint8)
+        # Strength tỉ lệ nghịch với ΔE: ΔE=0 → strength=1, ΔE≥60 → strength=0
+        despill_strength = np.clip(1.0 - (delta_e / 60.0), 0, 1)
+        # Tìm channel nền mạnh nhất (G cho green screen, B cho blue, etc.)
+        bg_float = dominant_bgr.astype(np.float32)  # [B, G, R]
+        dominant_ch = int(np.argmax(bg_float))  # channel cao nhất trong màu nền
+        channels = [b_c.astype(np.float32), g_c.astype(np.float32), r_c.astype(np.float32)]
+        # Channel nền mạnh nhất: cap bằng trung bình 2 channel còn lại
+        other_chs = [i for i in range(3) if i != dominant_ch]
+        avg_others = (channels[other_chs[0]] + channels[other_chs[1]]) / 2.0
+        # Chỉ giảm nếu channel nền > avg, và theo strength
+        excess = np.maximum(channels[dominant_ch] - avg_others, 0)
+        channels[dominant_ch][alive] = (channels[dominant_ch] - excess * despill_strength)[alive]
+        b_c = np.clip(channels[0], 0, 255).astype(np.uint8)
+        g_c = np.clip(channels[1], 0, 255).astype(np.uint8)
+        r_c = np.clip(channels[2], 0, 255).astype(np.uint8)
 
     # === 5. Morphological clean ===
     kernel_close = np.ones((3, 3), np.uint8)
