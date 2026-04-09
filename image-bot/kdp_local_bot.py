@@ -94,24 +94,15 @@ def _chroma_key(img_bgra, dominant_bgr):
     a_c[edge_and_bg] = 0
     edge_count = np.count_nonzero(edge_and_bg)
 
-    # === 4. Despill — trừ màu nền khỏi RGB ở vùng viền ===
-    # Tìm pixel viền còn sống (alpha > 0 và gần viền)
-    alpha_binary2 = (a_c > 0).astype(np.uint8) * 255
-    kernel_despill = np.ones((5, 5), np.uint8)
-    dilated2 = cv2.dilate(alpha_binary2, kernel_despill, iterations=1)
-    eroded2 = cv2.erode(alpha_binary2, kernel_despill, iterations=1)
-    despill_band = cv2.subtract(dilated2, eroded2)
-    despill_zone = (despill_band > 0) & (a_c > 0)
-
-    if np.any(despill_zone):
-        # Tính tỉ lệ pha trộn dựa trên ΔE: gần nền → despill mạnh
+    # === 4. Despill — trừ màu nền khỏi RGB toàn bộ pixel còn sống ===
+    alive = a_c > 0
+    if np.any(alive):
         despill_strength = np.clip(1.0 - (delta_e / 80.0), 0, 1)
         bg_float = dominant_bgr.astype(np.float32)
         for ch_idx, ch in enumerate([b_c, g_c, r_c]):
             ch_float = ch.astype(np.float32)
-            # Trừ phần pha trộn của màu nền ra khỏi pixel
-            corrected = ch_float - (bg_float[ch_idx] * despill_strength * 0.5)
-            ch_float[despill_zone] = corrected[despill_zone]
+            corrected = ch_float - (bg_float[ch_idx] * despill_strength * 0.7)
+            ch_float[alive] = corrected[alive]
             if ch_idx == 0:
                 b_c = np.clip(ch_float, 0, 255).astype(np.uint8)
             elif ch_idx == 1:
