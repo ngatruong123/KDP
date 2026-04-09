@@ -78,8 +78,10 @@ def _chroma_key(img_bgra, dominant_bgr):
 
     b_c, g_c, r_c, a_c = cv2.split(img_bgra)
 
-    # === 2. Global chroma-key ΔE < 38 ===
-    global_mask = delta_e < 38
+    # === 2. Global chroma-key — nền tối ΔE chặt hơn vì nhiều màu đậm gần đen ===
+    is_dark_bg = int(dominant_bgr.mean()) < 60
+    global_threshold = 18 if is_dark_bg else 38
+    global_mask = delta_e < global_threshold
     a_c[global_mask] = 0
     global_count = np.count_nonzero(global_mask)
 
@@ -90,7 +92,8 @@ def _chroma_key(img_bgra, dominant_bgr):
     eroded = cv2.erode(alpha_binary, kernel_edge, iterations=1)
     edge_band = cv2.subtract(dilated, eroded)
     edge_zone = edge_band > 0
-    edge_and_bg = edge_zone & (delta_e < 50)
+    edge_threshold = 30 if is_dark_bg else 50
+    edge_and_bg = edge_zone & (delta_e < edge_threshold)
     a_c[edge_and_bg] = 0
     edge_count = np.count_nonzero(edge_and_bg)
 
