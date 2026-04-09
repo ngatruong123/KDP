@@ -4,7 +4,6 @@ import time
 import subprocess
 from PIL import Image
 from rembg import remove, new_session
-import glob
 import numpy as np
 
 # Định nghĩa Tọa Độ của File chạy Upscayl C++
@@ -30,12 +29,12 @@ try:
     session = new_session("isnet-general-use")
 except Exception as e:
     print(f"Lỗi nạp não Rembg: {e}. Vui lòng cài lại qua pip install rembg[gpu] onnxruntime-silicon")
-    exit()
+    raise RuntimeError("Không khởi động được rembg")
 
 if not os.path.exists(UPSCAYL_ENGINE_PATH):
     print("❌ CHƯA TÌM THẤY LÕI CHẠY UPSCAYL!")
     print(f"Vui lòng kiểm tra lại đường dẫn: {UPSCAYL_ENGINE_PATH}")
-    exit()
+    raise RuntimeError("Không tìm thấy engine upscale")
 
 def process_file(ten_file):
     vao = os.path.join(THU_MUC_GOC, ten_file)
@@ -60,7 +59,7 @@ def process_file(ten_file):
             '-t', '0',
             '-f', 'png'
         ]
-        result = subprocess.run(cmd, cwd=os.path.dirname(UPSCAYL_ENGINE_PATH))
+        result = subprocess.run(cmd, cwd=os.path.dirname(UPSCAYL_ENGINE_PATH), timeout=120)
         if result.returncode != 0:
             print(f"Lỗi văng App Upscayl!")
             print("➡️ Lỗi này có thể do Cạc Đồ Họa Đời Cũ Của Máy Đuối Sức. Sếp chạy lại nhé.")
@@ -72,7 +71,7 @@ def process_file(ten_file):
 
         # --- BƯỚC 2: TÁCH NỀN (rembg + chroma-key) ---
         print("✂️ [2/3] Đang bóc nền...")
-        img_upscaled = cv2.imread(esrgan_out, cv2.IMREAD_UNCHANGED)
+        img_upscaled = cv2.imdecode(np.fromfile(esrgan_out, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
         img_sharpened = img_upscaled
         cv2.imwrite(tam_path, img_sharpened)
         img_goc = img_sharpened
@@ -84,7 +83,7 @@ def process_file(ten_file):
             o.write(output_data)
 
         # Lấy alpha từ rembg, ghép với RGB đã sharpen
-        img_rembg = cv2.imread(rembg_path, cv2.IMREAD_UNCHANGED)
+        img_rembg = cv2.imdecode(np.fromfile(rembg_path, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
         if img_rembg is not None and img_rembg.shape[2] == 4:
             alpha_rembg = img_rembg[:, :, 3]
             img_result = cv2.merge([img_sharpened[:, :, 0], img_sharpened[:, :, 1], img_sharpened[:, :, 2], alpha_rembg])
@@ -196,20 +195,18 @@ def process_single_image(input_path, output_path):
             '-t', '0',
             '-f', 'png'
         ]
-        result = subprocess.run(cmd, cwd=os.path.dirname(UPSCAYL_ENGINE_PATH), env=env)
+        result = subprocess.run(cmd, cwd=os.path.dirname(UPSCAYL_ENGINE_PATH), env=env, timeout=120)
         if result.returncode != 0:
-            print(f"❌ Lỗi Upscayl! Trả về file gốc.")
-            shutil.copy2(input_path, output_path)
-            return output_path
+            print(f"❌ Lỗi Upscayl!")
+            return None
 
         if not os.path.exists(esrgan_out):
             print(f"⚠️ Không thấy output Upscayl.")
-            shutil.copy2(input_path, output_path)
-            return output_path
+            return None
 
         # --- BƯỚC 2: TÁCH NỀN (rembg + chroma-key) ---
         print("✂️ [2/3] Đang bóc nền...")
-        img_upscaled = cv2.imread(esrgan_out, cv2.IMREAD_UNCHANGED)
+        img_upscaled = cv2.imdecode(np.fromfile(esrgan_out, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
         img_sharpened = img_upscaled
         cv2.imwrite(sharpened_path, img_sharpened)
         img_goc = img_sharpened
@@ -221,7 +218,7 @@ def process_single_image(input_path, output_path):
             o.write(output_data)
 
         # Lấy alpha từ rembg, ghép với RGB đã sharpen → giữ nguyên chất lượng màu
-        img_rembg = cv2.imread(rembg_path, cv2.IMREAD_UNCHANGED)
+        img_rembg = cv2.imdecode(np.fromfile(rembg_path, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
         if img_rembg is not None and img_rembg.shape[2] == 4:
             alpha_rembg = img_rembg[:, :, 3]
             img_result = cv2.merge([img_sharpened[:, :, 0], img_sharpened[:, :, 1], img_sharpened[:, :, 2], alpha_rembg])
@@ -244,25 +241,34 @@ def process_single_image(input_path, output_path):
             dominant_bgr = np.array(color_counts.most_common(1)[0][0], dtype=np.uint8)
             print(f"   🎨 Màu nền phát hiện (BGR): {dominant_bgr}")
 
-            # HSV chroma-key
-            dominant_hsv = cv2.cvtColor(dominant_bgr.reshape(1, 1, 3), cv2.COLOR_BGR2HSV)[0][0]
-            img_hsv = cv2.cvtColor(img_result[:, :, :3], cv2.COLOR_BGR2HSV)
-            h_tol, s_tol, v_tol = 15, 60, 60
-            lower_hsv = np.array([max(0, int(dominant_hsv[0]) - h_tol),
-                                  max(0, int(dominant_hsv[1]) - s_tol),
-                                  max(0, int(dominant_hsv[2]) - v_tol)], dtype=np.uint8)
-            upper_hsv = np.array([min(179, int(dominant_hsv[0]) + h_tol),
-                                  min(255, int(dominant_hsv[1]) + s_tol),
-                                  min(255, int(dominant_hsv[2]) + v_tol)], dtype=np.uint8)
-            mask_hsv = cv2.inRange(img_hsv, lower_hsv, upper_hsv)
+            # Chroma-key: nền tối dùng BGR chặt, nền sáng dùng HSV+BGR
+            is_dark_bg = int(dominant_bgr.mean()) < 60
 
-            # BGR backup (±50)
-            bgr_tol = 50
-            lower_bgr = np.clip(dominant_bgr.astype(int) - bgr_tol, 0, 255).astype(np.uint8)
-            upper_bgr = np.clip(dominant_bgr.astype(int) + bgr_tol, 0, 255).astype(np.uint8)
-            mask_bgr = cv2.inRange(img_result[:, :, :3], lower_bgr, upper_bgr)
+            if is_dark_bg:
+                # Nền tối: chỉ dùng BGR tolerance chặt (±25) vì HSV không đáng tin ở vùng tối
+                bgr_tol = 25
+                lower_bgr = np.clip(dominant_bgr.astype(int) - bgr_tol, 0, 255).astype(np.uint8)
+                upper_bgr = np.clip(dominant_bgr.astype(int) + bgr_tol, 0, 255).astype(np.uint8)
+                mask_bg = cv2.inRange(img_result[:, :, :3], lower_bgr, upper_bgr)
+            else:
+                # Nền sáng: HSV + BGR
+                dominant_hsv = cv2.cvtColor(dominant_bgr.reshape(1, 1, 3), cv2.COLOR_BGR2HSV)[0][0]
+                img_hsv = cv2.cvtColor(img_result[:, :, :3], cv2.COLOR_BGR2HSV)
+                h_tol, s_tol, v_tol = 15, 50, 50
+                lower_hsv = np.array([max(0, int(dominant_hsv[0]) - h_tol),
+                                      max(0, int(dominant_hsv[1]) - s_tol),
+                                      max(0, int(dominant_hsv[2]) - v_tol)], dtype=np.uint8)
+                upper_hsv = np.array([min(179, int(dominant_hsv[0]) + h_tol),
+                                      min(255, int(dominant_hsv[1]) + s_tol),
+                                      min(255, int(dominant_hsv[2]) + v_tol)], dtype=np.uint8)
+                mask_hsv = cv2.inRange(img_hsv, lower_hsv, upper_hsv)
 
-            mask_bg = cv2.bitwise_or(mask_hsv, mask_bgr)
+                bgr_tol = 40
+                lower_bgr = np.clip(dominant_bgr.astype(int) - bgr_tol, 0, 255).astype(np.uint8)
+                upper_bgr = np.clip(dominant_bgr.astype(int) + bgr_tol, 0, 255).astype(np.uint8)
+                mask_bgr = cv2.inRange(img_result[:, :, :3], lower_bgr, upper_bgr)
+
+                mask_bg = cv2.bitwise_or(mask_hsv, mask_bgr)
 
             # Xóa alpha pixel khớp màu nền, giữ nguyên pixel khác
             b_c, g_c, r_c, a_c = cv2.split(img_result)
@@ -283,9 +289,9 @@ def process_single_image(input_path, output_path):
         print(f"🥇 HOÀN TẤT: {ten_file} → {os.path.basename(output_path)}")
         return output_path
 
-    # Fallback
-    shutil.copy2(input_path, output_path)
-    return output_path
+    # Fallback — không nên tới đây, nhưng nếu có thì báo lỗi
+    print(f"❌ Lỗi không xác định khi xử lý {ten_file}")
+    return None
 
 
 if __name__ == "__main__":
