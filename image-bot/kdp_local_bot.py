@@ -38,21 +38,24 @@ _ENV["PYTHONUTF8"] = "1"
 # ════════════════════════════════════════════════════════════════
 
 
-def _threshold_alpha(img_bgra, thresh=128):
-    """Cắt dứt khoát alpha + Minimum (erode ELLIPSE) làm mượt viền:
-    1. Threshold → 0/255 (xoá loang)
-    2. Erode ELLIPSE 1px = Photoshop Minimum Roundness → viền mượt, không răng cưa."""
-    alpha = img_bgra[:, :, 3]
-    semi_count = cv2.countNonZero(((alpha > 0) & (alpha < 255)).astype(np.uint8))
+def _apply_bg_removal(img_bgra, bg_color, tol=10):
+    """Xoá nền đơn sắc chắc chắn 100%:
+    - Pixel RGB trùng màu nền ±tol → alpha=0 (BẤT KỂ rembg nói gì)
+    - Pixel RGB không trùng nền → giữ nguyên alpha từ rembg
+    Sau đó Minimum 1px (erode ELLIPSE) làm mượt viền."""
+    lower = np.clip(bg_color.astype(int) - tol, 0, 255).astype(np.uint8)
+    upper = np.clip(bg_color.astype(int) + tol, 0, 255).astype(np.uint8)
+    bg_mask = cv2.inRange(img_bgra[:, :, :3], lower, upper)
 
-    _, alpha_bin = cv2.threshold(alpha, thresh, 255, cv2.THRESH_BINARY)
+    killed = cv2.countNonZero(bg_mask)
+    img_bgra[:, :, 3][bg_mask == 255] = 0
 
-    # Minimum (Photoshop) = erode ELLIPSE → co viền 1px tròn, xoá răng cưa
+    # Minimum 1px (Photoshop) = erode ELLIPSE → viền mượt, không răng cưa
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-    alpha_min = cv2.erode(alpha_bin, kernel, iterations=1)
+    img_bgra[:, :, 3] = cv2.erode(img_bgra[:, :, 3], kernel, iterations=1)
 
-    img_bgra[:, :, 3] = alpha_min
-    print(f"   🔪 Threshold + Minimum 1px: {semi_count} px semi → cắt mượt (ngưỡng {thresh})")
+    total_px = img_bgra.shape[0] * img_bgra.shape[1]
+    print(f"   🎯 Xoá {killed}/{total_px} px trùng nền (BGR {bg_color} ±{tol}) + Minimum 1px")
     return img_bgra
 
 
@@ -151,26 +154,13 @@ def _detect_bg_color(img):
     return np.array([b, g, r], dtype=np.uint8), confidence
 
 
-def _chroma_key(img_bgra, bg_color, tol=10):
-    """Xoá mọi pixel trùng chính xác màu nền ±tol. Bổ sung cho rembg."""
-    lower = np.clip(bg_color.astype(int) - tol, 0, 255).astype(np.uint8)
-    upper = np.clip(bg_color.astype(int) + tol, 0, 255).astype(np.uint8)
-    mask = cv2.inRange(img_bgra[:, :, :3], lower, upper)
-    killed = cv2.countNonZero(mask)
-    img_bgra[:, :, 3][mask == 255] = 0
-    print(f"   🎯 Chroma-key: xoá {killed} px (BGR {bg_color}, ±{tol})")
-    return img_bgra
-
 
 def _process_core(input_path):
-    """Pipeline:
-    1. Đọc file (tránh Unicode crash)
-    2. Detect màu nền từ 4 góc
-    3. rembg cắt nền → lấy alpha, giữ RGB gốc
-    4. Chroma-key xoá chính xác pixel màu nền mà rembg bỏ sót
-    5. Vá lỗ thủng nội thất
-    6. Inpaint color bleed + AI Upscale x4→x2
-    7. Smart erode
+    """Pipeline cho ảnh nền đơn sắc:
+    1. Detect màu nền từ 4 góc
+    2. rembg → alpha mask, giữ RGB gốc
+    3. Xoá MỌI pixel trùng bg ±10 (chắc chắn 100%) + Minimum 1px
+    4. Inpaint color bleed + AI Upscale x4→x2
     """
     img_data = np.fromfile(input_path, dtype=np.uint8)
     if img_data.size == 0:
@@ -199,17 +189,10 @@ def _process_core(input_path):
     b_goc, g_goc, r_goc = cv2.split(img_goc[:, :, :3])
     transparent = cv2.merge([b_goc, g_goc, r_goc, transparent[:, :, 3]])
 
-    # ── BƯỚC 2.5: THRESHOLD ALPHA — XOÁ VÙNG BÁN TRONG SUỐT ──
-    # Vùng semi-transparent (alpha 1-254) là nơi màu nền gradient rò rỉ → loang lổ
-    transparent = _threshold_alpha(transparent, thresh=128)
-
-    # ── BƯỚC 3: CHROMA-KEY BỔ SUNG ──
-    # Xoá pixel trùng chính xác màu nền mà rembg bỏ sót (viền loang, vùng bán trong suốt)
-    if confidence >= 0.40:
-        print("🔫 [2/5] Chroma-key bổ sung (xoá pixel trùng màu nền)...")
-        transparent = _chroma_key(transparent, bg_color, tol=10)
-    else:
-        print("   🛡️ Bỏ qua chroma-key (tin cậy <40%)")
+    # ── BƯỚC 3: XOÁ NỀN ĐƠN SẮC + MINIMUM ──
+    # Mọi pixel RGB trùng bg ±10 → alpha=0. Không trùng → giữ nguyên alpha rembg.
+    print("🔫 [2/4] Xoá pixel trùng màu nền + Minimum 1px...")
+    transparent = _apply_bg_removal(transparent, bg_color, tol=10)
 
     # ── BƯỚC 4: INPAINT COLOR BLEED + AI UPSCALE ──
     print("📈 [3/5] Color Bleed & Upscale AI x4→x2...")
