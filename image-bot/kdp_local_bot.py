@@ -28,9 +28,6 @@ except Exception as e:
 if not os.path.exists(UPSCAYL_ENGINE_PATH):
     raise RuntimeError(f"Không tìm thấy Upscayl engine: {UPSCAYL_ENGINE_PATH}")
 
-# Tạo sẵn kernel erode 1 lần
-_ERODE_KERNEL = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-
 # Env UTF-8 tạo sẵn 1 lần
 _ENV = os.environ.copy()
 _ENV["PYTHONUTF8"] = "1"
@@ -61,21 +58,21 @@ def _detect_bg_color(img):
 
 
 def _remove_bg_color(img_bgra, bg_color, tol=7):
-    """Xoá chính xác pixel trùng màu nền (±tol) trong alpha channel."""
+    """Xoá TOÀN BỘ pixel trùng chính xác màu nền (±tol) — kể cả bên trong object.
+    Không erode để tránh gặm lỗ."""
     lower = np.clip(bg_color.astype(int) - tol, 0, 255).astype(np.uint8)
     upper = np.clip(bg_color.astype(int) + tol, 0, 255).astype(np.uint8)
     mask = cv2.inRange(img_bgra[:, :, :3], lower, upper)
     img_bgra[:, :, 3][mask == 255] = 0
     print(f"   🎯 Chroma-key: xoá {cv2.countNonZero(mask)} px (BGR {bg_color}, ±{tol})")
-
-    # Cạo viền 1px
-    img_bgra[:, :, 3] = cv2.erode(img_bgra[:, :, 3], _ERODE_KERNEL, iterations=1)
     return img_bgra
 
 
 def _upscale_x4_to_x2(input_path, env):
     """Upscale x4 bằng realesrgan rồi resize x2. Trả về numpy array hoặc None."""
     import tempfile
+    # Chuyển sang absolute path — vì cwd sẽ đổi sang bin/ khi gọi engine
+    input_path = os.path.abspath(input_path)
     with tempfile.NamedTemporaryFile(suffix='_x4.png', delete=False) as tmp:
         x4_path = tmp.name
 
@@ -89,8 +86,11 @@ def _upscale_x4_to_x2(input_path, env):
             '-f', 'png'
         ]
         result = subprocess.run(cmd, cwd=os.path.dirname(UPSCAYL_ENGINE_PATH), env=env,
-                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         if result.returncode != 0 or not os.path.exists(x4_path):
+            stderr_msg = result.stderr.decode(errors='ignore').strip()
+            if stderr_msg:
+                print(f"   ❌ Upscale engine lỗi: {stderr_msg[:200]}")
             return None
 
         img_x4 = cv2.imread(x4_path, cv2.IMREAD_UNCHANGED)
@@ -177,10 +177,10 @@ def process_file(ten_file):
 def process_single_image(input_path, output_path):
     """
     Xử lý 1 ảnh được gọi từ main.py:
-      1. Upscale x4→x2 ảnh gốc có nền (không vệt đen)
-      2. rembg cắt nền in-memory
-      3. Chroma-key BGR±7 dọn rác
-      4. Erode 1px + xuất 300 DPI
+      1. Upscale x4→x2 ảnh gốc có nền (AI làm nét)
+      2. rembg cắt nền in-memory (chỉ lấy alpha)
+      3. Chroma-key BGR±7 xoá chính xác màu nền
+      4. Xuất PNG 300 DPI
     """
     import shutil
 
