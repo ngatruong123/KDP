@@ -186,56 +186,56 @@ def _upscale_x4_to_x2(input_path):
 
 
 # ════════════════════════════════════════════════════════════════
-#  PIPELINE CHÍNH — LÀM NÉT TRƯỚC, CẮT SAU
+#  PIPELINE CHÍNH — CẮT TRƯỚC (NHANH), LÀM NÉT SAU (SẠCH)
 # ════════════════════════════════════════════════════════════════
 
 def _process_core(input_path):
-    """Pipeline tối ưu nhất:
-    1. Upscale x4→x2 ảnh gốc CÓ NỀN (AI làm nét sạch, không artifact)
-    2. rembg cắt nền trên ảnh HD (nhiều pixel → mask chính xác hơn)
-    3. Vá lỗ thủng nhỏ trong alpha mask
-    4. Flood-fill chroma-key CHỈ từ viền
-    5. Smart erode
+    """Pipeline tối ưu:
+    1. rembg cắt nền trên ảnh GỐC (nhỏ → nhanh, mask y hệt vì ISNet luôn resize về 1024)
+    2. Upscale ảnh gốc CÓ NỀN x4→x2 → lấy RGB HD sắc nét
+    3. Resize alpha mask lên HD bằng LANCZOS (giữ cạnh mượt)
+    4. Ghép RGB HD + Alpha HD
+    5. Vá lỗ thủng nhỏ, flood-fill chroma, smart erode
     """
     img_goc = cv2.imread(input_path, cv2.IMREAD_UNCHANGED)
     if img_goc is None:
         return None
 
-    # ── BƯỚC 1: LÀM NÉT TRƯỚC ──
-    print("📈 [1/5] Upscale x4→x2 ảnh gốc (có nền, không rác)...")
+    # ── BƯỚC 1: CẮT NỀN TRÊN ẢNH GỐC (NHỎ, CỰC NHANH) ──
+    print("✂️ [1/5] rembg cắt nền trên ảnh gốc (nhanh)...")
+    with open(input_path, 'rb') as f:
+        out_bytes = remove(f.read(), session=session, post_process_mask=False)
+
+    out_arr = np.frombuffer(out_bytes, dtype=np.uint8)
+    rembg_result = cv2.imdecode(out_arr, cv2.IMREAD_UNCHANGED)
+
+    if rembg_result is None or rembg_result.shape[2] != 4:
+        raise ValueError("rembg không trả về ảnh RGBA!")
+
+    alpha_mask_small = rembg_result[:, :, 3]
+
+    # ── BƯỚC 2: UPSCALE ẢNH GỐC CÓ NỀN → RGB HD ──
+    print("📈 [2/5] Upscale x4→x2 ảnh gốc (có nền, không rác)...")
     img_hd = _upscale_x4_to_x2(input_path)
     if img_hd is None:
-        print("⚠️ Upscale thất bại, dùng resize LANCZOS4 thay thế")
+        print("⚠️ Upscale thất bại, dùng resize LANCZOS4")
         h, w = img_goc.shape[:2]
         img_hd = cv2.resize(img_goc, (w * 2, h * 2), interpolation=cv2.INTER_LANCZOS4)
 
-    # Ghi tạm bản HD ra disk để rembg đọc
-    tmp_hd_path = os.path.join(tempfile.gettempdir(), f"hd_{os.path.basename(input_path)}.png")
-    cv2.imwrite(tmp_hd_path, img_hd)
+    # ── BƯỚC 3: RESIZE ALPHA MASK LÊN KÍCH THƯỚC HD ──
+    hd_h, hd_w = img_hd.shape[:2]
+    alpha_mask_hd = cv2.resize(alpha_mask_small, (hd_w, hd_h), interpolation=cv2.INTER_LANCZOS4)
+    print(f"   📐 Alpha mask: {alpha_mask_small.shape[1]}x{alpha_mask_small.shape[0]} → {hd_w}x{hd_h}")
 
-    # ── BƯỚC 2: CẮT NỀN TRÊN BẢN HD ──
-    print("✂️ [2/5] rembg cắt nền trên bản HD (chính xác hơn gốc)...")
-    with open(tmp_hd_path, 'rb') as f:
-        out_bytes = remove(f.read(), session=session, post_process_mask=False)
-    os.remove(tmp_hd_path)
-
-    out_arr = np.frombuffer(out_bytes, dtype=np.uint8)
-    transparent = cv2.imdecode(out_arr, cv2.IMREAD_UNCHANGED)
-
-    if transparent is None or transparent.shape[2] != 4:
-        raise ValueError("rembg không trả về ảnh RGBA!")
-
-    # Ghép RGB từ bản HD (sắc nét) + Alpha từ rembg (chính xác)
-    # rembg thỉnh thoảng thay đổi RGB → ta chỉ lấy alpha, giữ RGB gốc HD
-    alpha_mask = transparent[:, :, 3]
+    # Ghép RGB HD + Alpha HD
     b, g, r = cv2.split(img_hd[:, :, :3])
-    transparent = cv2.merge([b, g, r, alpha_mask])
+    transparent = cv2.merge([b, g, r, alpha_mask_hd])
 
-    # ── BƯỚC 3: VÁ LỖ THỦNG NHỎ ──
+    # ── BƯỚC 4: VÁ LỖ THỦNG NHỎ ──
     print("🩹 [3/5] Vá lỗ thủng nhỏ trong alpha mask...")
     transparent = _patch_small_holes(transparent)
 
-    # ── BƯỚC 4: FLOOD-FILL CHROMA-KEY TỪ VIỀN ──
+    # ── BƯỚC 5: FLOOD-FILL CHROMA-KEY TỪ VIỀN ──
     print("🔫 [4/5] Flood-fill chroma-key (chỉ từ viền)...")
     bg_color, confidence, adaptive_tol = _detect_bg_color(img_hd[:, :, :3])
     print(f"   🎨 Màu nền (BGR): {bg_color}, tin cậy: {confidence:.0%}, tol: ±{adaptive_tol}")
