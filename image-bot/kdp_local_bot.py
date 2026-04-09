@@ -211,7 +211,7 @@ def _process_core(input_path):
         return None
 
     # ── BƯỚC 1: TÁCH NỀN ──
-    print("✂️ [1/4] rembg tách nền...")
+    print("✂️ [1/5] rembg tách nền...")
     with open(input_path, 'rb') as f:
         out_bytes = remove(f.read(), session=session, post_process_mask=False)
 
@@ -220,6 +220,38 @@ def _process_core(input_path):
 
     if transparent is None or transparent.shape[2] != 4:
         raise ValueError("rembg không trả về ảnh RGBA!")
+
+    # ── BƯỚC 1.5: VÁ LỖ THỦNG NHỎ TRONG ALPHA MASK ──
+    # rembg thường đánh dấu sai các chi tiết nhỏ (chữ, hoa văn) là "nền"
+    # → tạo lỗ thủng trong alpha mask. Ta lấp lại các lỗ NHỎ (<2% diện tích).
+    # Các khoảng trống LỚN (kẽ tay, kẽ chân) vẫn được giữ nguyên.
+    print("🩹 [1.5/5] Vá lỗ thủng nhỏ trong alpha mask (do rembg đánh dấu sai)...")
+    alpha = transparent[:, :, 3]
+    total_area = alpha.shape[0] * alpha.shape[1]
+    max_hole_area = total_area * 0.02  # Lỗ < 2% diện tích = lỗi rembg → lấp
+
+    # Tìm các vùng kín bên trong (lỗ thủng = vùng alpha=0 bị bao quanh bởi alpha>0)
+    # Đảo ngược mask: vùng trong suốt thành trắng, vùng mờ đục thành đen
+    alpha_bin = (alpha > 127).astype(np.uint8) * 255
+    alpha_inv = cv2.bitwise_not(alpha_bin)
+
+    # Tìm contour các vùng trong suốt
+    contours, hierarchy = cv2.findContours(alpha_inv, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
+
+    patched_count = 0
+    if hierarchy is not None:
+        for i, contour in enumerate(contours):
+            # RETR_CCOMP: hierarchy[0][i][3] == -1 nghĩa là contour ngoài cùng (nền chính)
+            # hierarchy[0][i][3] != -1 nghĩa là contour con (lỗ bên trong object)
+            parent = hierarchy[0][i][3]
+            if parent != -1:  # Đây là lỗ bên trong, không phải nền ngoài
+                area = cv2.contourArea(contour)
+                if area < max_hole_area:
+                    cv2.drawContours(alpha, [contour], -1, 255, -1)  # Lấp lỗ
+                    patched_count += 1
+
+    transparent[:, :, 3] = alpha
+    print(f"   🩹 Đã vá {patched_count} lỗ thủng nhỏ (ngưỡng < {max_hole_area:.0f} px = 2% ảnh)")
 
     # ── BƯỚC 2: FLOOD-FILL CHROMA-KEY TỪ VIỀN ──
     print("🔫 [2/4] Flood-fill chroma-key (chỉ quét từ viền ảnh)...")
