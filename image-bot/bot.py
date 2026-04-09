@@ -1,7 +1,5 @@
 import os
 import asyncio
-import random
-import re
 from playwright.async_api import async_playwright
 
 class ImageBotCore:

@@ -5,7 +5,6 @@ import subprocess
 from PIL import Image
 from rembg import remove, new_session
 import numpy as np
-from collections import Counter
 
 # Upscayl engine path
 _engine_name = "realesrgan-ncnn-vulkan.exe" if os.name == "nt" else "realesrgan-ncnn-vulkan"
@@ -29,20 +28,36 @@ except Exception as e:
 if not os.path.exists(UPSCAYL_ENGINE_PATH):
     raise RuntimeError(f"Không tìm thấy Upscayl engine: {UPSCAYL_ENGINE_PATH}")
 
+# Tạo sẵn kernel erode 1 lần
+_ERODE_KERNEL = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+
+# Env UTF-8 tạo sẵn 1 lần
+_ENV = os.environ.copy()
+_ENV["PYTHONUTF8"] = "1"
+
 
 def _detect_bg_color(img):
-    """Chấm màu nền dominant từ 4 viền ảnh."""
+    """Chấm màu nền dominant từ 4 viền ảnh. Dùng numpy thuần, không .tolist()."""
     h, w = img.shape[:2]
     margin = max(5, min(h, w) // 20)
-    samples = []
-    samples.extend(img[0:margin, :, :3].reshape(-1, 3).tolist())
-    samples.extend(img[-margin:, :, :3].reshape(-1, 3).tolist())
-    samples.extend(img[margin:-margin, 0:margin, :3].reshape(-1, 3).tolist())
-    samples.extend(img[margin:-margin, -margin:, :3].reshape(-1, 3).tolist())
-    samples_arr = np.array(samples, dtype=np.uint8)
-    quantized = (samples_arr // 16) * 16 + 8
-    color_counts = Counter([tuple(c) for c in quantized.tolist()])
-    return np.array(color_counts.most_common(1)[0][0], dtype=np.uint8)
+    # Gom 4 viền thành 1 mảng numpy liên tục
+    top = img[0:margin, :, :3].reshape(-1, 3)
+    bot = img[-margin:, :, :3].reshape(-1, 3)
+    left = img[margin:-margin, 0:margin, :3].reshape(-1, 3)
+    right = img[margin:-margin, -margin:, :3].reshape(-1, 3)
+    samples = np.concatenate([top, bot, left, right], axis=0)
+
+    # Quantize và tìm dominant bằng numpy — nhanh hơn Counter 10-50x
+    quantized = (samples // 16).astype(np.uint32)
+    # Pack 3 kênh thành 1 số duy nhất để đếm
+    packed = (quantized[:, 0] << 16) | (quantized[:, 1] << 8) | quantized[:, 2]
+    values, counts = np.unique(packed, return_counts=True)
+    dominant_packed = values[counts.argmax()]
+    # Unpack
+    b = ((dominant_packed >> 16) & 0xFF) * 16 + 8
+    g = ((dominant_packed >> 8) & 0xFF) * 16 + 8
+    r = (dominant_packed & 0xFF) * 16 + 8
+    return np.array([b, g, r], dtype=np.uint8)
 
 
 def _remove_bg_color(img_bgra, bg_color, tol=7):
@@ -54,13 +69,12 @@ def _remove_bg_color(img_bgra, bg_color, tol=7):
     print(f"   🎯 Chroma-key: xoá {cv2.countNonZero(mask)} px (BGR {bg_color}, ±{tol})")
 
     # Cạo viền 1px
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-    img_bgra[:, :, 3] = cv2.erode(img_bgra[:, :, 3], kernel, iterations=1)
+    img_bgra[:, :, 3] = cv2.erode(img_bgra[:, :, 3], _ERODE_KERNEL, iterations=1)
     return img_bgra
 
 
-def _upscale_x4_to_x2(input_path, output_path, env):
-    """Upscale x4 bằng realesrgan rồi resize x2. Trả về True nếu thành công."""
+def _upscale_x4_to_x2(input_path, env):
+    """Upscale x4 bằng realesrgan rồi resize x2. Trả về numpy array hoặc None."""
     import tempfile
     with tempfile.NamedTemporaryFile(suffix='_x4.png', delete=False) as tmp:
         x4_path = tmp.name
@@ -74,40 +88,69 @@ def _upscale_x4_to_x2(input_path, output_path, env):
             '-t', '0',
             '-f', 'png'
         ]
-        result = subprocess.run(cmd, cwd=os.path.dirname(UPSCAYL_ENGINE_PATH), env=env)
+        result = subprocess.run(cmd, cwd=os.path.dirname(UPSCAYL_ENGINE_PATH), env=env,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         if result.returncode != 0 or not os.path.exists(x4_path):
-            print(f"❌ Upscayl thất bại")
-            return False
+            return None
 
         img_x4 = cv2.imread(x4_path, cv2.IMREAD_UNCHANGED)
         if img_x4 is None:
-            return False
+            return None
 
         h, w = img_x4.shape[:2]
         img_x2 = cv2.resize(img_x4, (w // 2, h // 2), interpolation=cv2.INTER_AREA)
-        cv2.imwrite(output_path, img_x2)
         print(f"   📐 Upscale: {w//4}x{h//4} → {w//2}x{h//2} (x4→x2)")
-        return True
+        return img_x2
     finally:
         if os.path.exists(x4_path):
             os.remove(x4_path)
 
 
-def _rembg_remove(input_path, output_path):
-    """Cắt nền bằng rembg, lưu BGRA png."""
-    with open(input_path, 'rb') as f:
-        output_data = remove(f.read(), session=session, post_process_mask=False)
-    with open(output_path, 'wb') as f:
-        f.write(output_data)
+def _rembg_in_memory(img_bgr):
+    """Cắt nền bằng rembg in-memory.
+    CHỈ lấy alpha mask từ rembg, giữ nguyên RGB gốc — tránh rembg sửa màu/tạo vệt đen."""
+    _, buf = cv2.imencode('.png', img_bgr)
+    out_bytes = remove(buf.tobytes(), session=session, post_process_mask=False)
+    out_arr = np.frombuffer(out_bytes, dtype=np.uint8)
+    rembg_out = cv2.imdecode(out_arr, cv2.IMREAD_UNCHANGED)
+
+    # Lấy alpha từ rembg, ghép với RGB gốc
+    alpha = rembg_out[:, :, 3] if rembg_out.shape[2] == 4 else np.full(img_bgr.shape[:2], 255, dtype=np.uint8)
+    b, g, r = cv2.split(img_bgr[:, :, :3])
+    return cv2.merge([b, g, r, alpha])
+
+
+def _process_core(img_goc, input_path_for_upscale):
+    """Logic xử lý chung: upscale → rembg → chroma → trả về BGRA."""
+    # Bước 1: Upscale x4→x2 ảnh GỐC CÓ NỀN
+    print("📈 [1/3] Upscale x4→x2 ảnh gốc (có nền)...")
+    img_upscaled = _upscale_x4_to_x2(input_path_for_upscale, _ENV)
+    if img_upscaled is None:
+        print("⚠️ Upscale fail, dùng resize LANCZOS4")
+        h, w = img_goc.shape[:2]
+        img_upscaled = cv2.resize(img_goc, (w * 2, h * 2), interpolation=cv2.INTER_LANCZOS4)
+
+    # Bước 2: rembg cắt nền in-memory (không ghi disk)
+    print("✂️ [2/3] rembg cắt nền...")
+    img_result = _rembg_in_memory(img_upscaled)
+
+    # Bước 3: Chroma-key
+    print("⚒️ [3/3] Chroma-key...")
+    bg_color = _detect_bg_color(img_upscaled)
+    print(f"   🎨 Màu nền (BGR): {bg_color}")
+    img_result = _remove_bg_color(img_result, bg_color, tol=7)
+
+    return img_result
+
+
+def _save_300dpi(img_bgra, output_path):
+    """Chuyển BGRA → RGBA và lưu PNG 300 DPI."""
+    img_rgba = cv2.cvtColor(img_bgra, cv2.COLOR_BGRA2RGBA)
+    Image.fromarray(img_rgba).save(output_path, "PNG", dpi=(300, 300))
 
 
 def process_file(ten_file):
     """Xử lý file từ thư mục watcher."""
-    import tempfile
-
-    env = os.environ.copy()
-    env["PYTHONUTF8"] = "1"
-
     vao = os.path.join(THU_MUC_GOC, ten_file)
     ten_khong_duoi = ten_file.rsplit('.', 1)[0]
     ket_qua_path = os.path.join(THU_MUC_THANH_PHAM, ten_khong_duoi + '_VIP.png')
@@ -121,34 +164,8 @@ def process_file(ten_file):
             print(f"❌ Không đọc được: {vao}")
             return
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            upscaled_path = os.path.join(tmpdir, 'upscaled.png')
-            rembg_path = os.path.join(tmpdir, 'rembg.png')
-
-            # Bước 1: Upscale x4→x2 ảnh GỐC CÓ NỀN (opaque, không vệt đen)
-            print("📈 [1/3] Upscale x4→x2 ảnh gốc (có nền)...")
-            if not _upscale_x4_to_x2(vao, upscaled_path, env):
-                print("⚠️ Upscale fail, dùng resize thường")
-                h, w = img_goc.shape[:2]
-                img_x2 = cv2.resize(img_goc, (w * 2, h * 2), interpolation=cv2.INTER_LANCZOS4)
-                cv2.imwrite(upscaled_path, img_x2)
-
-            # Bước 2: rembg cắt nền trên ảnh đã upscale
-            print("✂️ [2/3] rembg cắt nền...")
-            _rembg_remove(upscaled_path, rembg_path)
-
-            img_upscaled = cv2.imread(upscaled_path, cv2.IMREAD_UNCHANGED)
-            img_result = cv2.imread(rembg_path, cv2.IMREAD_UNCHANGED)
-
-            # Bước 3: Chroma-key dọn rác nền còn sót
-            print("⚒️ [3/3] Chroma-key + xuất 300DPI...")
-            bg_color = _detect_bg_color(img_upscaled)
-            print(f"   🎨 Màu nền (BGR): {bg_color}")
-            img_result = _remove_bg_color(img_result, bg_color, tol=7)
-
-            # Xuất
-            img_rgba = cv2.cvtColor(img_result, cv2.COLOR_BGRA2RGBA)
-            Image.fromarray(img_rgba).save(ket_qua_path, "PNG", dpi=(300, 300))
+        img_result = _process_core(img_goc, vao)
+        _save_300dpi(img_result, ket_qua_path)
 
         os.remove(vao)
         print(f"🥇 HOÀN TẤT: {ten_file}")
@@ -161,14 +178,11 @@ def process_single_image(input_path, output_path):
     """
     Xử lý 1 ảnh được gọi từ main.py:
       1. Upscale x4→x2 ảnh gốc có nền (không vệt đen)
-      2. rembg cắt nền (AI chính xác)
+      2. rembg cắt nền in-memory
       3. Chroma-key BGR±7 dọn rác
       4. Erode 1px + xuất 300 DPI
     """
-    import tempfile, shutil
-
-    env = os.environ.copy()
-    env["PYTHONUTF8"] = "1"
+    import shutil
 
     ten_file = os.path.basename(input_path)
     print(f"\n=====================================")
@@ -181,36 +195,10 @@ def process_single_image(input_path, output_path):
             shutil.copy2(input_path, output_path)
             return output_path
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            upscaled_path = os.path.join(tmpdir, 'upscaled.png')
-            rembg_path = os.path.join(tmpdir, 'rembg.png')
-
-            # Bước 1: Upscale x4→x2 ảnh GỐC CÓ NỀN
-            print("📈 [1/3] Upscale x4→x2 ảnh gốc (có nền)...")
-            if not _upscale_x4_to_x2(input_path, upscaled_path, env):
-                print("⚠️ Upscale fail, dùng resize thường")
-                h, w = img_goc.shape[:2]
-                img_x2 = cv2.resize(img_goc, (w * 2, h * 2), interpolation=cv2.INTER_LANCZOS4)
-                cv2.imwrite(upscaled_path, img_x2)
-
-            # Bước 2: rembg cắt nền
-            print("✂️ [2/3] rembg cắt nền...")
-            _rembg_remove(upscaled_path, rembg_path)
-
-            img_upscaled = cv2.imread(upscaled_path, cv2.IMREAD_UNCHANGED)
-            img_result = cv2.imread(rembg_path, cv2.IMREAD_UNCHANGED)
-
-            # Bước 3: Chroma-key dọn rác
-            print("⚒️ [3/3] Chroma-key + xuất 300DPI...")
-            bg_color = _detect_bg_color(img_upscaled)
-            print(f"   🎨 Màu nền (BGR): {bg_color}")
-            img_result = _remove_bg_color(img_result, bg_color, tol=7)
-
-            # Xuất
-            img_rgba = cv2.cvtColor(img_result, cv2.COLOR_BGRA2RGBA)
-            Image.fromarray(img_rgba).save(output_path, "PNG", dpi=(300, 300))
-            print(f"🥇 HOÀN TẤT: {ten_file} → {os.path.basename(output_path)}")
-            return output_path
+        img_result = _process_core(img_goc, input_path)
+        _save_300dpi(img_result, output_path)
+        print(f"🥇 HOÀN TẤT: {ten_file} → {os.path.basename(output_path)}")
+        return output_path
 
     except Exception as e:
         print(f"❌ Lỗi tại {ten_file}: {e}")

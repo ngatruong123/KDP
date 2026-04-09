@@ -4,10 +4,10 @@ import argparse
 from google_api import GoogleManager
 from bot import ImageBotCore
 from kdp_local_bot import process_single_image
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ThreadPoolExecutor
 
 def _process_one(args):
-    """Top-level function để ProcessPoolExecutor pickle được"""
+    """Xử lý 1 ảnh (dùng cho ThreadPoolExecutor)"""
     file_path, processed_path = args
     print(f"🔪 Đang xử lý: {os.path.basename(file_path)}...")
     process_single_image(file_path, processed_path)
@@ -118,8 +118,8 @@ async def main():
 
             # Xử lý song song: upscale + tách nền (2 process)
             process_args = [(fp, fp.rsplit('.', 1)[0] + '_VIP.png') for fp in output_files_paths]
-            print(f"⚡ Xử lý song song {len(output_files_paths)} ảnh (2 process)...")
-            with ProcessPoolExecutor(max_workers=2) as executor:
+            print(f"⚡ Xử lý song song {len(output_files_paths)} ảnh (2 thread)...")
+            with ThreadPoolExecutor(max_workers=2) as executor:
                 processed_paths = list(executor.map(_process_one, process_args))
 
             # Upload ảnh đã xử lý vào _Processed
