@@ -180,7 +180,12 @@ def _upscale_x4_to_x2(input_path):
                 print(f"   ❌ Upscale lỗi: {stderr_msg[:200]}")
             return None
 
-        img_x4 = cv2.imread(x4_path, cv2.IMREAD_UNCHANGED)
+        # cv2.imread có thể lỗi silent trên Windows nếu path có ký tự lạ
+        img_x4_data = np.fromfile(x4_path, dtype=np.uint8)
+        if img_x4_data.size == 0:
+            return None
+        img_x4 = cv2.imdecode(img_x4_data, cv2.IMREAD_UNCHANGED)
+        
         if img_x4 is None:
             return None
 
@@ -205,7 +210,13 @@ def _process_core(input_path):
     4. Ghép RGB HD + Alpha HD
     5. Vá lỗ thủng nhỏ, flood-fill chroma, smart erode
     """
-    img_goc = cv2.imread(input_path, cv2.IMREAD_UNCHANGED)
+    # cv2.imread bị lỗi silent (trả về None) trên Windows nếu đường dẫn có dấu tiếng Việt
+    # Dùng np.fromfile + cv2.imdecode để tránh hoàn toàn lỗi này
+    img_data = np.fromfile(input_path, dtype=np.uint8)
+    if img_data.size == 0:
+        return None
+    img_goc = cv2.imdecode(img_data, cv2.IMREAD_UNCHANGED)
+    
     if img_goc is None:
         return None
 
