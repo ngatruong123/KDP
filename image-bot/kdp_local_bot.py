@@ -37,54 +37,24 @@ _ENV["PYTHONUTF8"] = "1"
 #  CÔNG CỤ PHỤ TRỢ
 # ════════════════════════════════════════════════════════════════
 
-def _patch_all_enclosed_holes(img_bgra):
-    """Vá LỖ THỦNG NỘI THẤT (do AI cắt nhầm số hoặc dải băng).
-    Dùng .copy() để giải quyết triệt để lỗi C-contiguous của OpenCV."""
-    # .copy() tạo vùng nhớ độc lập, KHÔNG BAO GIỜ bị crash hàm drawContours nữa!
-    alpha = img_bgra[:, :, 3].copy()
-    total_area = alpha.shape[0] * alpha.shape[1]
-    
-    # Ngưỡng vá cực lớn (40% ảnh). Cứ lỗ nào nằm hoàn toàn bên trong nhân vật là VÁ CHẾT.
-    max_hole = total_area * 0.40
 
-    alpha_bin = (alpha > 127).astype(np.uint8) * 255
-    alpha_inv = cv2.bitwise_not(alpha_bin)
+def _threshold_alpha(img_bgra, thresh=128):
+    """Cắt dứt khoát alpha + Minimum (erode ELLIPSE) làm mượt viền:
+    1. Threshold → 0/255 (xoá loang)
+    2. Erode ELLIPSE 1px = Photoshop Minimum Roundness → viền mượt, không răng cưa."""
+    alpha = img_bgra[:, :, 3]
+    semi_count = cv2.countNonZero(((alpha > 0) & (alpha < 255)).astype(np.uint8))
 
-    contours, hierarchy = cv2.findContours(alpha_inv, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
+    _, alpha_bin = cv2.threshold(alpha, thresh, 255, cv2.THRESH_BINARY)
 
-    patched = 0
-    if hierarchy is not None:
-        for i, c in enumerate(contours):
-            if hierarchy[0][i][3] != -1:  # -1 nghĩa là mảng nền bên ngoài, != -1 là lỗ bên trong
-                if cv2.contourArea(c) < max_hole:
-                    cv2.drawContours(alpha, [c], -1, 255, -1)
-                    patched += 1
+    # Minimum (Photoshop) = erode ELLIPSE → co viền 1px tròn, xoá răng cưa
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    alpha_min = cv2.erode(alpha_bin, kernel, iterations=1)
 
-    img_bgra[:, :, 3] = alpha
-    if patched > 0:
-        print(f"   🩹 VÁ THÀNH CÔNG {patched} mảng thủng nội thất (do AI cắt nhầm).")
+    img_bgra[:, :, 3] = alpha_min
+    print(f"   🔪 Threshold + Minimum 1px: {semi_count} px semi → cắt mượt (ngưỡng {thresh})")
     return img_bgra
 
-
-def _smart_erode(img_bgra):
-    """Gọt viền thông minh 1px: chỉ áp dụng nếu nét không quá mỏng."""
-    b_c, g_c, r_c, a_c = cv2.split(img_bgra)
-    kernel_cross = cv2.getStructuringElement(cv2.MORPH_CROSS, (3, 3))
-    a_eroded = cv2.erode(a_c, kernel_cross, iterations=1)
-
-    total = cv2.countNonZero(a_c)
-    if total == 0:
-        return img_bgra
-
-    lost = total - cv2.countNonZero(a_eroded)
-    pct = (lost / total) * 100
-
-    if pct > 10:
-        print(f"   🛡️ Bỏ qua gọt viền ({pct:.1f}% sẽ mất — nét quá mỏng)")
-        return img_bgra
-    else:
-        print(f"   ⛏️ Gọt viền 1px ({pct:.1f}% — an toàn)")
-        return cv2.merge([b_c, g_c, r_c, a_eroded])
 
 
 def _color_bleed_and_upscale(img_bgra):
@@ -158,24 +128,64 @@ def _color_bleed_and_upscale(img_bgra):
 #  PIPELINE CHÍNH — PHOENIX (Tái sinh từ đống tro tàn)
 # ════════════════════════════════════════════════════════════════
 
+def _detect_bg_color(img):
+    """Chấm màu nền dominant từ 4 góc ảnh."""
+    h, w = img.shape[:2]
+    cs = max(8, min(h, w) // 15)
+    tl = img[0:cs, 0:cs, :3].reshape(-1, 3)
+    tr = img[0:cs, -cs:, :3].reshape(-1, 3)
+    bl = img[-cs:, 0:cs, :3].reshape(-1, 3)
+    br = img[-cs:, -cs:, :3].reshape(-1, 3)
+    samples = np.concatenate([tl, tr, bl, br], axis=0)
+
+    quantized = (samples // 16).astype(np.uint32)
+    packed = (quantized[:, 0] << 16) | (quantized[:, 1] << 8) | quantized[:, 2]
+    values, counts = np.unique(packed, return_counts=True)
+    best_idx = counts.argmax()
+    dominant_packed = values[best_idx]
+    confidence = float(counts[best_idx]) / float(len(packed))
+
+    b = int((dominant_packed >> 16) & 0xFF) * 16 + 8
+    g = int((dominant_packed >> 8) & 0xFF) * 16 + 8
+    r = int(dominant_packed & 0xFF) * 16 + 8
+    return np.array([b, g, r], dtype=np.uint8), confidence
+
+
+def _chroma_key(img_bgra, bg_color, tol=10):
+    """Xoá mọi pixel trùng chính xác màu nền ±tol. Bổ sung cho rembg."""
+    lower = np.clip(bg_color.astype(int) - tol, 0, 255).astype(np.uint8)
+    upper = np.clip(bg_color.astype(int) + tol, 0, 255).astype(np.uint8)
+    mask = cv2.inRange(img_bgra[:, :, :3], lower, upper)
+    killed = cv2.countNonZero(mask)
+    img_bgra[:, :, 3][mask == 255] = 0
+    print(f"   🎯 Chroma-key: xoá {killed} px (BGR {bg_color}, ±{tol})")
+    return img_bgra
+
+
 def _process_core(input_path):
-    """Pipeline Phẫu Thuật Đỉnh Cao:
+    """Pipeline:
     1. Đọc file (tránh Unicode crash)
-    2. rembg cắt nền trên ảnh GỐC
-    3. Patch Holes: Rịt ngay các lỗ thủng bên trong (chống lủng nội thất '250', dải băng) bằng Memory Copy an toàn.
-    4. Color Bleed + Upscale: Thổi màu thịt tràn vào vùng nền rồi mới Upscale. Đuổi cổ 100% rác viền đen/xám của Google!
-    5. Smart Erode: Tỉa viền sắc sảo.
+    2. Detect màu nền từ 4 góc
+    3. rembg cắt nền → lấy alpha, giữ RGB gốc
+    4. Chroma-key xoá chính xác pixel màu nền mà rembg bỏ sót
+    5. Vá lỗ thủng nội thất
+    6. Inpaint color bleed + AI Upscale x4→x2
+    7. Smart erode
     """
     img_data = np.fromfile(input_path, dtype=np.uint8)
     if img_data.size == 0:
         return None
     img_goc = cv2.imdecode(img_data, cv2.IMREAD_UNCHANGED)
-    
+
     if img_goc is None:
         return None
 
-    # ── BƯỚC 1: CẮT NỀN (ISNET) ──
-    print("✂️ [1/4] rembg (ISNet) tách nền trên ảnh gốc...")
+    # ── BƯỚC 1: DETECT MÀU NỀN ──
+    bg_color, confidence = _detect_bg_color(img_goc)
+    print(f"   🎨 Màu nền (BGR): {bg_color}, tin cậy: {confidence:.0%}")
+
+    # ── BƯỚC 2: CẮT NỀN (ISNET) ──
+    print("✂️ [1/5] rembg (ISNet) tách nền trên ảnh gốc...")
     with open(input_path, 'rb') as f:
         out_bytes = remove(f.read(), session=session, post_process_mask=False)
 
@@ -185,28 +195,32 @@ def _process_core(input_path):
     if transparent is None or transparent.shape[2] != 4:
         raise ValueError("rembg không trả về ảnh RGBA!")
 
-    # BƯỚC QUAN TRỌNG: Lấy RGB TỪ ẢNH GỐC bù vào RGB của rembg (vì rembg đôi khi tẩy màu sai)
+    # Lấy RGB TỪ ẢNH GỐC (rembg đôi khi tẩy màu sai)
     b_goc, g_goc, r_goc = cv2.split(img_goc[:, :, :3])
     transparent = cv2.merge([b_goc, g_goc, r_goc, transparent[:, :, 3]])
 
-    # ── BƯỚC 2: VÁ LỖ THỦNG NỘI THẤT BỊ CẮT NHẦM (SỐ, DẢI BĂNG) ──
-    transparent = _patch_all_enclosed_holes(transparent)
+    # ── BƯỚC 2.5: THRESHOLD ALPHA — XOÁ VÙNG BÁN TRONG SUỐT ──
+    # Vùng semi-transparent (alpha 1-254) là nơi màu nền gradient rò rỉ → loang lổ
+    transparent = _threshold_alpha(transparent, thresh=128)
 
-    # ── BƯỚC 3: ĐỔ TRÀN MÀU + AI UPSCALE (DIỆT TẬN GỐC RÁC VIỀN ĐEN/XÁM) ──
-    print("📈 [2/4] Color Bleed & Upscale AI x4→x2 (đuổi trừ rác viền)...")
+    # ── BƯỚC 3: CHROMA-KEY BỔ SUNG ──
+    # Xoá pixel trùng chính xác màu nền mà rembg bỏ sót (viền loang, vùng bán trong suốt)
+    if confidence >= 0.40:
+        print("🔫 [2/5] Chroma-key bổ sung (xoá pixel trùng màu nền)...")
+        transparent = _chroma_key(transparent, bg_color, tol=10)
+    else:
+        print("   🛡️ Bỏ qua chroma-key (tin cậy <40%)")
+
+    # ── BƯỚC 4: INPAINT COLOR BLEED + AI UPSCALE ──
+    print("📈 [3/5] Color Bleed & Upscale AI x4→x2...")
     upscaled = _color_bleed_and_upscale(transparent)
-    
+
     if upscaled is None:
-        print("⚠️ Upscale thất bại, trả lại ảnh chưa nét")
-        # Phản hồi an toàn
+        print("⚠️ Upscale thất bại, fallback resize LANCZOS4")
         h, w = transparent.shape[:2]
         upscaled = cv2.resize(transparent, (w*2, h*2), interpolation=cv2.INTER_LANCZOS4)
 
-    # ── BƯỚC 4: GỌT VIỀN ──
-    print("⛏️ [4/4] Dọn dẹp viền mỏng ngoài cùng...")
-    final = _smart_erode(upscaled)
-
-    return final
+    return upscaled
 
 
 def _save_300dpi(img_bgra, output_path):
