@@ -8,3 +8,4 @@ python-dotenv>=1.0.1
 opencv-python-headless
 numpy
 Pillow
+rembg>=2.0.50

@@ -4,7 +4,7 @@ import argparse
 from google_api import GoogleManager
 from bot import ImageBotCore
 from kdp_local_bot import process_single_image
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor
 import shutil
 
 async def main():
@@ -72,9 +72,8 @@ async def main():
             # Cần căn chỉnh trực tiếp vị trí nên script bot.process_image_job đang được Comment lại ở file bot.py
 
             # GỌI LOGIC TẠO ẢNH BẰNG TRÌNH DUYỆT GHÉP NỐI VỚI GOOGLE LABS
-            download_reso = job.get('download_reso', '2K')
             print(f"🚀 Bắt chuyển giao lệnh cho Bot ({tong_so_luong} ảnh, độ nét y/c: {download_reso})...")
-            output_files_paths = await bot.process_image_job(job_idx + 1, input_path, prompt, job['aspect_ratio'], so_luong, tong_so_luong, download_reso)
+            output_files_paths = await bot.process_image_job(row_num, input_path, prompt, job['aspect_ratio'], so_luong, tong_so_luong, download_reso)
             
             if not output_files_paths:
                 retry_count = job.get('retry_count', 0)
@@ -115,8 +114,8 @@ async def main():
                 process_single_image(file_path, processed_path)
                 return processed_path
 
-            print(f"⚡ Xử lý song song {len(output_files_paths)} ảnh (2 luồng)...")
-            with ThreadPoolExecutor(max_workers=2) as executor:
+            print(f"⚡ Xử lý song song {len(output_files_paths)} ảnh (2 process)...")
+            with ProcessPoolExecutor(max_workers=2) as executor:
                 processed_paths = list(executor.map(_process_one, output_files_paths))
 
             # Upload ảnh đã xử lý vào _Processed
@@ -130,6 +129,14 @@ async def main():
             # Cập nhật kết quả vào Excel
             gmanager.update_job_status(row_num, "Xong ✅", result_link=link_share)
             print(f"🎉 SUẤT XẮC! Ảnh ĐÃ VÀO DRIVE THẬT 100%. Link tải: {link_share}")
+
+            # Cleanup temp files
+            for f in output_files_paths + processed_paths:
+                if os.path.exists(f):
+                    os.remove(f)
+            if os.path.exists(input_path):
+                os.remove(input_path)
+            print("🧹 Đã dọn sạch file tạm.")
 
         except Exception as e:
             print(f"Lỗi khi chạy vòng lặp Bot: {e}")

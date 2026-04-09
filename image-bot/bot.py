@@ -42,7 +42,7 @@ class ImageBotCore:
             # Thử chờ 20s xem có sẵn File Input không (Trường hợp Web tải thẳng vào Canvas cũ)
             await self.page.wait_for_selector("input[type='file']", state="attached", timeout=20000)
             print("✅ Đã ở sẵn trong giao diện Canvas!")
-        except:
+        except Exception:
             # Khả năng cao đang ở Dashboard (Trang chủ Flow) hoặc Chưa Đăng Nhập
             try:
                 # Chờ tối đa 20s cho UI nút Tạo web hiện ra (4 Chrome ẩn khiến CPU lag gắt, React load cực chậm)
@@ -151,9 +151,9 @@ class ImageBotCore:
                 try:
                     await file_inputs.nth(k).evaluate("el => el.value = ''")
                     await file_inputs.nth(k).set_input_files(input_image_path)
-                except:
+                except Exception:
                     pass
-                    
+
             print("👁️ [AI]: Đã rỉa được lỗ hở Upload! Tải ảnh lên thành công.")
             
             # CHỜ ĐỢI ẢNH TẢI LÊN ĐẠT 100% (KHẮC PHỤC LỖI CLICK SỚM)
@@ -222,7 +222,7 @@ class ImageBotCore:
                         add_btn = self.page.locator(add_btn_selector).last
                         await add_btn.click(force=True)
                         print("✅ HOÀN HẢO! ĐÃ MÓC DÂY ẢNH GỐC (Dạng CHIP THUMBNAIL) THÀNH CÔNG!")
-                    except:
+                    except Exception:
                         print("⚠️ Menu trượt phởn do CPU quá tải, ko thấy [Thêm vào câu lệnh]! Thu hồi trỏ...")
                         await self.page.keyboard.press("Escape")
                         
@@ -315,6 +315,8 @@ class ImageBotCore:
                     print("🎉 Ố LÀ LA! 100% Hoàn Tất! Các mảng ảnh đã nặn xong!!!")
                     await asyncio.sleep(3) # Chờ cho ảnh render sắc nét
                     break
+            else:
+                print("⚠️ TIMEOUT: Đã chờ 240s mà progress vẫn chưa xong!")
             
             # 4. Quét Lấy Nút Tải Xuống Ổn Định thông qua Phép thử Lọc Trừ URL Mới/Cũ
             new_img_locators = await self.page.locator("img").all()
@@ -365,7 +367,7 @@ class ImageBotCore:
                         if await close_toast_btns.count() > 0:
                             for idx in range(await close_toast_btns.count()):
                                 await close_toast_btns.nth(idx).click(force=True)
-                    except: pass
+                    except Exception: pass
 
                     # Tìm tile wrapper chứa ảnh này (dùng data-tile-id)
                     tile = img_node.locator("xpath=./ancestor::div[@data-tile-id][1]")
@@ -375,15 +377,8 @@ class ImageBotCore:
 
                     await asyncio.sleep(0.2)
 
-                    # Hover tile: dùng dispatchEvent để trigger hover mà không scroll
-                    await self.page.mouse.move(0, 0)
-                    await asyncio.sleep(0.3)
-                    await tile.dispatch_event("mouseenter")
-                    await tile.dispatch_event("mouseover")
-                    # Cũng move chuột vào tile để browser nhận hover state
-                    tile_bb = await tile.bounding_box()
-                    if tile_bb:
-                        await self.page.mouse.move(tile_bb['x'] + tile_bb['width']/2, tile_bb['y'] + tile_bb['height']/2)
+                    # Hover tile: force=True để trigger CSS hover mà không scroll
+                    await tile.hover(force=True)
                     await asyncio.sleep(1.0)
 
                     # Tìm nút 3 chấm BÊN TRONG tile
@@ -421,7 +416,7 @@ class ImageBotCore:
                         try:
                             # Chống treo Playwright 30s với Locator
                             await menu_btn.click(force=True, timeout=3000)
-                        except:
+                        except Exception:
                             await menu_btn.evaluate("el => el.click()")
                         await asyncio.sleep(1.2)
 
@@ -445,7 +440,7 @@ class ImageBotCore:
                                 async with self.page.expect_download(timeout=120000) as download_info:
                                     try:
                                         await reso_btn.click(force=True, timeout=5000)
-                                    except:
+                                    except Exception:
                                         # Ép nhấp bằng JS nếu React chặn
                                         await reso_btn.evaluate("el => el.click()")
                                 print(f"✅ Đã bấm dính nút chọn mốc [{download_reso}] hoàn hảo!")
@@ -453,7 +448,7 @@ class ImageBotCore:
                                 async with self.page.expect_download(timeout=120000) as download_info:
                                     try:
                                         await dl_btn.click(force=True, timeout=5000)
-                                    except:
+                                    except Exception:
                                         await dl_btn.evaluate("el => el.click()")
 
                             download = await download_info.value
@@ -473,6 +468,13 @@ class ImageBotCore:
 
                             await self.page.keyboard.press("Escape")
                             await asyncio.sleep(0.3)
+
+                            # Reset scroll sau download để tránh lệch vị trí ảnh tiếp theo
+                            await self.page.evaluate("""() => {
+                                document.querySelectorAll('*').forEach(el => {
+                                    if (el.scrollTop > 0) el.scrollTop = 0;
+                                });
+                            }""")
                         else:
                             print("⚠️ Mở menu rồi mà mù mắt ko thấy chữ Tải xuống!")
                             await self.page.keyboard.press("Escape")
