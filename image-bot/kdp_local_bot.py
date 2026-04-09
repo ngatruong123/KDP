@@ -70,8 +70,8 @@ def _chroma_key(img_bgra, dominant_bgr):
 
     b_c, g_c, r_c, a_c = cv2.split(img_bgra)
 
-    # Lớp 1: toàn ảnh — chỉ cắt pixel gần như 100% giống nền (ΔE < 5)
-    global_mask = delta_e < 5
+    # Lớp 1: toàn ảnh — cắt pixel giống nền (ΔE < 15)
+    global_mask = delta_e < 15
     a_c[global_mask] = 0
     global_count = np.count_nonzero(global_mask)
 
@@ -82,13 +82,13 @@ def _chroma_key(img_bgra, dominant_bgr):
     eroded = cv2.erode(alpha_binary, kernel_edge, iterations=1)
     edge_band = cv2.subtract(dilated, eroded)  # vùng 2px quanh viền
 
-    # Trong vùng viền: cắt mạnh hơn (ΔE < 20) + fade
+    # Trong vùng viền: cắt mạnh hơn (ΔE < 25) + fade
     edge_zone = edge_band > 0
-    edge_and_bg = edge_zone & (delta_e < 20)
-    fade_mask = edge_zone & (delta_e >= 5) & (delta_e < 20)
+    edge_and_bg = edge_zone & (delta_e < 25)
+    fade_mask = edge_zone & (delta_e >= 15) & (delta_e < 25)
     a_float = a_c.astype(np.float32)
-    a_float[edge_and_bg & (delta_e < 5)] = 0
-    fade_factor = (delta_e[fade_mask] - 5) / (20 - 5)
+    a_float[edge_and_bg & (delta_e < 15)] = 0
+    fade_factor = (delta_e[fade_mask] - 15) / (25 - 15)
     a_float[fade_mask] = a_float[fade_mask] * fade_factor
     a_c = np.clip(a_float, 0, 255).astype(np.uint8)
 
