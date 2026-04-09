@@ -88,21 +88,15 @@ def _smart_erode(img_bgra):
 
 
 def _color_bleed_and_upscale(img_bgra):
-    """Công nghệ chống rác viền đỉnh cao nhất: COLOR BLEED (Đổ tràn màu nhân vật).
-    Kéo giãn màu của subject ra ngoài không gian trong suốt, triệt tiêu toàn bộ màu nền cũ của Google (màu đen/xám loang lổ).
-    Sau đó Upscale phần thịt màu tinh khiết này lên. AI sẽ ko bao giờ ảo giác ra màu rác!"""
+    """Color bleed bằng cv2.inpaint: tô màu subject lan ra vùng transparent,
+    rồi upscale ảnh opaque sạch → AI không bao giờ tạo rác viền đen/xám."""
     b, g, r, a = cv2.split(img_bgra)
     bgr = cv2.merge([b, g, r])
-    
-    # 1. NHÂN BẢN TRÀN MÀU RA NGOÀI 15 PIXEL (Fast Color Bleed)
-    fg_mask = (a > 127).astype(np.uint8)
-    kernel = np.ones((3,3), np.uint8)
-    bled_bgr = bgr.copy()
-    
-    for _ in range(15):
-        dilated = cv2.dilate(bled_bgr, kernel)
-        bled_bgr = np.where(fg_mask[:,:,None] == 1, bgr, dilated)
-        
+
+    # 1. INPAINT: Tô vùng transparent bằng màu nội suy từ subject (đúng thuật toán, 1 lần)
+    inpaint_mask = (a < 128).astype(np.uint8) * 255
+    bled_bgr = cv2.inpaint(bgr, inpaint_mask, inpaintRadius=15, flags=cv2.INPAINT_TELEA)
+
     # 2. XUẤT RA ẢNH VÀ ĐƯA CHO AI UPSCALE
     with tempfile.NamedTemporaryFile(suffix='_bled.png', delete=False) as tmp_in:
         bled_path = tmp_in.name
