@@ -6,7 +6,6 @@ from PIL import Image
 from rembg import remove, new_session
 import numpy as np
 import tempfile
-import shutil
 
 # Upscayl engine path
 _engine_name = "realesrgan-ncnn-vulkan.exe" if os.name == "nt" else "realesrgan-ncnn-vulkan"
@@ -38,6 +37,35 @@ _ENV["PYTHONUTF8"] = "1"
 #  CÔNG CỤ PHỤ TRỢ
 # ════════════════════════════════════════════════════════════════
 
+def _patch_all_enclosed_holes(img_bgra):
+    """Vá LỖ THỦNG NỘI THẤT (do AI cắt nhầm số hoặc dải băng).
+    Dùng .copy() để giải quyết triệt để lỗi C-contiguous của OpenCV."""
+    # .copy() tạo vùng nhớ độc lập, KHÔNG BAO GIỜ bị crash hàm drawContours nữa!
+    alpha = img_bgra[:, :, 3].copy()
+    total_area = alpha.shape[0] * alpha.shape[1]
+    
+    # Ngưỡng vá cực lớn (40% ảnh). Cứ lỗ nào nằm hoàn toàn bên trong nhân vật là VÁ CHẾT.
+    max_hole = total_area * 0.40
+
+    alpha_bin = (alpha > 127).astype(np.uint8) * 255
+    alpha_inv = cv2.bitwise_not(alpha_bin)
+
+    contours, hierarchy = cv2.findContours(alpha_inv, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
+
+    patched = 0
+    if hierarchy is not None:
+        for i, c in enumerate(contours):
+            if hierarchy[0][i][3] != -1:  # -1 nghĩa là mảng nền bên ngoài, != -1 là lỗ bên trong
+                if cv2.contourArea(c) < max_hole:
+                    cv2.drawContours(alpha, [c], -1, 255, -1)
+                    patched += 1
+
+    img_bgra[:, :, 3] = alpha
+    if patched > 0:
+        print(f"   🩹 VÁ THÀNH CÔNG {patched} mảng thủng nội thất (do AI cắt nhầm).")
+    return img_bgra
+
+
 def _smart_erode(img_bgra):
     """Gọt viền thông minh 1px: chỉ áp dụng nếu nét không quá mỏng."""
     b_c, g_c, r_c, a_c = cv2.split(img_bgra)
@@ -59,16 +87,33 @@ def _smart_erode(img_bgra):
         return cv2.merge([b_c, g_c, r_c, a_eroded])
 
 
-def _upscale_x4_to_x2(input_path):
-    """Upscale ảnh GỐC CÓ NỀN (x4→x2). Giúp AI không bị ảo giác rác đen ở vùng trong suốt."""
-    input_path = os.path.abspath(input_path)
-    with tempfile.NamedTemporaryFile(suffix='_x4.png', delete=False) as tmp:
-        x4_path = tmp.name
+def _color_bleed_and_upscale(img_bgra):
+    """Công nghệ chống rác viền đỉnh cao nhất: COLOR BLEED (Đổ tràn màu nhân vật).
+    Kéo giãn màu của subject ra ngoài không gian trong suốt, triệt tiêu toàn bộ màu nền cũ của Google (màu đen/xám loang lổ).
+    Sau đó Upscale phần thịt màu tinh khiết này lên. AI sẽ ko bao giờ ảo giác ra màu rác!"""
+    b, g, r, a = cv2.split(img_bgra)
+    bgr = cv2.merge([b, g, r])
+    
+    # 1. NHÂN BẢN TRÀN MÀU RA NGOÀI 15 PIXEL (Fast Color Bleed)
+    fg_mask = (a > 127).astype(np.uint8)
+    kernel = np.ones((3,3), np.uint8)
+    bled_bgr = bgr.copy()
+    
+    for _ in range(15):
+        dilated = cv2.dilate(bled_bgr, kernel)
+        bled_bgr = np.where(fg_mask[:,:,None] == 1, bgr, dilated)
+        
+    # 2. XUẤT RA ẢNH VÀ ĐƯA CHO AI UPSCALE
+    with tempfile.NamedTemporaryFile(suffix='_bled.png', delete=False) as tmp_in:
+        bled_path = tmp_in.name
+    with tempfile.NamedTemporaryFile(suffix='_x4.png', delete=False) as tmp_out:
+        x4_path = tmp_out.name
 
     try:
+        cv2.imwrite(bled_path, bled_bgr)
         cmd = [
             UPSCAYL_ENGINE_PATH,
-            '-i', input_path,
+            '-i', bled_path,
             '-o', x4_path,
             '-n', 'realesrgan-x4plus',
             '-t', '0',
@@ -80,13 +125,14 @@ def _upscale_x4_to_x2(input_path):
         except subprocess.TimeoutExpired:
             print(f"   ❌ Upscale timeout (>120s)")
             return None
+            
         if result.returncode != 0 or not os.path.exists(x4_path):
             stderr_msg = result.stderr.decode(errors='ignore').strip()
             if stderr_msg:
                 print(f"   ❌ Upscale lỗi: {stderr_msg[:200]}")
             return None
 
-        # cv2.imread có thể lỗi silent trên Windows nếu path có ký tự lạ
+        # Đọc ảnh đã Upscale x4
         img_x4_data = np.fromfile(x4_path, dtype=np.uint8)
         if img_x4_data.size == 0:
             return None
@@ -95,32 +141,37 @@ def _upscale_x4_to_x2(input_path):
         if img_x4 is None:
             return None
 
+        # 3. THU HỒI VỀ x2 VÀ GHÉP TRẢ LẠI ALPHA MASK
         h, w = img_x4.shape[:2]
-        img_x2 = cv2.resize(img_x4, (w // 2, h // 2), interpolation=cv2.INTER_AREA)
-        print(f"   📐 {w//4}x{h//4} → {w//2}x{h//2} (x4→x2)")
-        return img_x2
+        img_x2_rgb = cv2.resize(img_x4, (w // 2, h // 2), interpolation=cv2.INTER_AREA)
+        
+        target_w, target_h = w // 2, h // 2
+        alpha_x2 = cv2.resize(a, (target_w, target_h), interpolation=cv2.INTER_LANCZOS4)
+        
+        b2, g2, r2 = cv2.split(img_x2_rgb)
+        final = cv2.merge([b2, g2, r2, alpha_x2])
+        
+        print(f"   📐 {w//4}x{h//4} → {target_w}x{target_h} (x4→x2, Clear Bleed)")
+        return final
+        
     finally:
-        if os.path.exists(x4_path):
-            os.remove(x4_path)
+        for p in [bled_path, x4_path]:
+            if os.path.exists(p):
+                os.remove(p)
 
 
 # ════════════════════════════════════════════════════════════════
-#  PIPELINE CHÍNH — TỐI GIẢN TỐI ĐA (CHỈ GIAO VIỆC CHO AI)
+#  PIPELINE CHÍNH — PHOENIX (Tái sinh từ đống tro tàn)
 # ════════════════════════════════════════════════════════════════
 
 def _process_core(input_path):
-    """Pipeline tối giản & an toàn tuyệt đối:
-    1. rembg (AI) cắt nền trên ảnh GỐC (nhỏ → nhanh)
-    2. Upscale (AI) ảnh gốc CÓ NỀN x4→x2 → lấy RGB HD sắc nét
-    3. Resize alpha mask lên HD bằng LANCZOS (giữ cạnh mượt)
-    4. Ghép RGB HD + Alpha HD
-    5. Smart erode (gọt viền thừa)
-    
-    Lý do hủy bỏ color-based (chroma key / flood fill):
-    Chroma-key phá nát các vùng màu sáng (kim cương trắng, chữ bạc) vì màu của chúng trùng với màu nền sáng, đặc biệt khi các dải màu này nằm sát viền ảnh dẫn đến thuật toán đổ len lỏi vào nội thất ảnh. Rút kinh nghiệm, ta giao toàn bộ quyền sinh sát Alpha mask cho mạng neural (ISNet) để tránh cắt mù quáng.
+    """Pipeline Phẫu Thuật Đỉnh Cao:
+    1. Đọc file (tránh Unicode crash)
+    2. rembg cắt nền trên ảnh GỐC
+    3. Patch Holes: Rịt ngay các lỗ thủng bên trong (chống lủng nội thất '250', dải băng) bằng Memory Copy an toàn.
+    4. Color Bleed + Upscale: Thổi màu thịt tràn vào vùng nền rồi mới Upscale. Đuổi cổ 100% rác viền đen/xám của Google!
+    5. Smart Erode: Tỉa viền sắc sảo.
     """
-    # cv2.imread bị lỗi silent (trả về None) trên Windows nếu đường dẫn có dấu tiếng Việt
-    # Dùng np.fromfile + cv2.imdecode để tránh hoàn toàn lỗi này
     img_data = np.fromfile(input_path, dtype=np.uint8)
     if img_data.size == 0:
         return None
@@ -129,41 +180,39 @@ def _process_core(input_path):
     if img_goc is None:
         return None
 
-    # ── BƯỚC 1: CẮT NỀN BẰNG REMBG (TRÊN ẢNH NHỎ) ──
-    print("✂️ [1/3] rembg (ISNet) tách nền trên ảnh gốc...")
+    # ── BƯỚC 1: CẮT NỀN (ISNET) ──
+    print("✂️ [1/4] rembg (ISNet) tách nền trên ảnh gốc...")
     with open(input_path, 'rb') as f:
         out_bytes = remove(f.read(), session=session, post_process_mask=False)
 
     out_arr = np.frombuffer(out_bytes, dtype=np.uint8)
-    rembg_result = cv2.imdecode(out_arr, cv2.IMREAD_UNCHANGED)
+    transparent = cv2.imdecode(out_arr, cv2.IMREAD_UNCHANGED)
 
-    if rembg_result is None or rembg_result.shape[2] != 4:
+    if transparent is None or transparent.shape[2] != 4:
         raise ValueError("rembg không trả về ảnh RGBA!")
 
-    alpha_mask_small = rembg_result[:, :, 3]
+    # BƯỚC QUAN TRỌNG: Lấy RGB TỪ ẢNH GỐC bù vào RGB của rembg (vì rembg đôi khi tẩy màu sai)
+    b_goc, g_goc, r_goc = cv2.split(img_goc[:, :, :3])
+    transparent = cv2.merge([b_goc, g_goc, r_goc, transparent[:, :, 3]])
 
-    # ── BƯỚC 2: UPSCALE ẢNH GỐC CÓ NỀN → RGB HD ──
-    print("📈 [2/3] Upscale AI x4→x2 ảnh gốc (giữ nguyên nền chống ám đen)...")
-    img_hd = _upscale_x4_to_x2(input_path)
-    if img_hd is None:
-        print("⚠️ Upscale thất bại, fallback sang resize LANCZOS4")
-        h, w = img_goc.shape[:2]
-        img_hd = cv2.resize(img_goc, (w * 2, h * 2), interpolation=cv2.INTER_LANCZOS4)
+    # ── BƯỚC 2: VÁ LỖ THỦNG NỘI THẤT BỊ CẮT NHẦM (SỐ, DẢI BĂNG) ──
+    transparent = _patch_all_enclosed_holes(transparent)
 
-    # ── BƯỚC 3: RESIZE ALPHA MASK LÊN HD VÀ GHÉP ──
-    hd_h, hd_w = img_hd.shape[:2]
-    alpha_mask_hd = cv2.resize(alpha_mask_small, (hd_w, hd_h), interpolation=cv2.INTER_LANCZOS4)
-    print(f"   📐 Resize Alpha Mask lên độ phân giải HD")
-
-    # Ghép RGB HD (sắc nét, không rác) + Alpha HD (chính xác)
-    b, g, r = cv2.split(img_hd[:, :, :3])
-    transparent = cv2.merge([b, g, r, alpha_mask_hd])
+    # ── BƯỚC 3: ĐỔ TRÀN MÀU + AI UPSCALE (DIỆT TẬN GỐC RÁC VIỀN ĐEN/XÁM) ──
+    print("📈 [2/4] Color Bleed & Upscale AI x4→x2 (đuổi trừ rác viền)...")
+    upscaled = _color_bleed_and_upscale(transparent)
+    
+    if upscaled is None:
+        print("⚠️ Upscale thất bại, trả lại ảnh chưa nét")
+        # Phản hồi an toàn
+        h, w = transparent.shape[:2]
+        upscaled = cv2.resize(transparent, (w*2, h*2), interpolation=cv2.INTER_LANCZOS4)
 
     # ── BƯỚC 4: GỌT VIỀN ──
-    print("⛏️ [3/3] Dọn dẹp viền mỏng ngoài cùng...")
-    transparent = _smart_erode(transparent)
+    print("⛏️ [4/4] Dọn dẹp viền mỏng ngoài cùng...")
+    final = _smart_erode(upscaled)
 
-    return transparent
+    return final
 
 
 def _save_300dpi(img_bgra, output_path):
