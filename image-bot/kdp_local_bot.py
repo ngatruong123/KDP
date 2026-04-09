@@ -56,7 +56,7 @@ def _detect_bg_color(img_bgr):
     return dominant_bgr, ratio
 
 
-def _chroma_key(img_bgra, dominant_bgr, hard_threshold=15, soft_threshold=25):
+def _chroma_key(img_bgra, dominant_bgr, hard_threshold=25, soft_threshold=35):
     """
     Xóa pixel khớp màu nền bằng LAB ΔE + alpha mềm cho viền.
     ΔE < hard_threshold → alpha = 0 (xóa hoàn toàn)
