@@ -174,8 +174,7 @@ def process_file(ten_file):
         print("🪄 Đang áp Minimum toàn bộ ảnh...")
         b_f, g_f, r_f, a_f = cv2.split(img_result)
         kernel_min = np.ones((2, 2), np.uint8)
-        a_eroded = cv2.erode(a_f, kernel_min, iterations=1)
-        a_f = cv2.addWeighted(a_f, 0.5, a_eroded, 0.5, 0)
+        a_f = cv2.erode(a_f, kernel_min, iterations=1)
         img_result = cv2.merge([b_f, g_f, r_f, a_f])
 
         # Save 300dpi
@@ -250,8 +249,7 @@ def process_single_image(input_path, output_path):
         print("🪄 Đang áp Minimum toàn bộ ảnh...")
         b_f, g_f, r_f, a_f = cv2.split(img_result)
         kernel_min = np.ones((2, 2), np.uint8)
-        a_eroded = cv2.erode(a_f, kernel_min, iterations=1)
-        a_f = cv2.addWeighted(a_f, 0.5, a_eroded, 0.5, 0)
+        a_f = cv2.erode(a_f, kernel_min, iterations=1)
         img_result = cv2.merge([b_f, g_f, r_f, a_f])
 
         # Save 300dpi
