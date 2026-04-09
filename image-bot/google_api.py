@@ -188,6 +188,24 @@ class GoogleManager:
             print(f"⚠️ Lỗi phân rã Thư mục Drive: {e}")
             return None
 
+    def reset_failed_jobs(self):
+        """Quét toàn bộ sheet, dòng nào có status chứa 'lỗi' hoặc '❌' thì reset về 'Chờ xử lý' để bot chạy lại"""
+        records = self.worksheet.get_all_records()
+        headers = self.worksheet.row_values(1)
+        status_col_idx = headers.index("status") + 1 if "status" in headers else 5
+        count = 0
+        for index, row in enumerate(records):
+            clean_row = {str(k).strip().lower(): v for k, v in row.items()}
+            status = str(clean_row.get("status", "")).strip()
+            status_lower = status.lower()
+            if "lỗi" in status_lower or "❌" in status or "error" in status_lower:
+                row_num = index + 2
+                self.worksheet.update_cell(row_num, status_col_idx, "Chờ xử lý")
+                print(f"   🔄 Dòng {row_num}: [{status}] → [Chờ xử lý]")
+                count += 1
+        print(f"✅ Đã reset {count} dòng lỗi về 'Chờ xử lý'.")
+        return count
+
     def update_job_status(self, row_num, status, result_link=""):
         """Cập nhật trạng thái và link kết quả lên Google Sheets. Tự động rà tìm cột theo Header"""
         try:

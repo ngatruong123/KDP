@@ -7,6 +7,13 @@ from kdp_local_bot import process_single_image
 from concurrent.futures import ProcessPoolExecutor
 import shutil
 
+def _process_one(args):
+    """Top-level function để ProcessPoolExecutor pickle được"""
+    file_path, processed_path = args
+    print(f"🔪 Đang xử lý: {os.path.basename(file_path)}...")
+    process_single_image(file_path, processed_path)
+    return processed_path
+
 async def main():
     parser = argparse.ArgumentParser(description="Image Bot Queue Worker")
     parser.add_argument("--acc", type=str, default="default", help="Tên tài khoản (Ví dụ: acc1, acc2)")
@@ -30,7 +37,11 @@ async def main():
     input_dir = f"inputs_temp_{args.acc}" if args.acc != "default" else "inputs_temp"
     os.makedirs(input_dir, exist_ok=True)
 
-    # 3. VÒNG LẶP SĂN VIỆC LIÊN TỤC
+    # 3. Quét reset các dòng lỗi để bot tự chạy lại
+    print("🔄 Đang quét dòng lỗi để reset...")
+    gmanager.reset_failed_jobs()
+
+    # 4. VÒNG LẶP SĂN VIỆC LIÊN TỤC
     job_idx = 0
     while True:
         job = gmanager.checkout_next_job(args.acc)
@@ -107,16 +118,11 @@ async def main():
             else:
                 processed_folder_id, _ = gmanager.create_drive_folder("_Processed", job_specific_folder_id)
 
-            # Xử lý song song: upscale + tách nền (2 worker)
-            def _process_one(file_path):
-                processed_path = file_path.rsplit('.', 1)[0] + '_VIP.png'
-                print(f"🔪 Đang xử lý: {os.path.basename(file_path)}...")
-                process_single_image(file_path, processed_path)
-                return processed_path
-
+            # Xử lý song song: upscale + tách nền (2 process)
+            process_args = [(fp, fp.rsplit('.', 1)[0] + '_VIP.png') for fp in output_files_paths]
             print(f"⚡ Xử lý song song {len(output_files_paths)} ảnh (2 process)...")
             with ProcessPoolExecutor(max_workers=2) as executor:
-                processed_paths = list(executor.map(_process_one, output_files_paths))
+                processed_paths = list(executor.map(_process_one, process_args))
 
             # Upload ảnh đã xử lý vào _Processed
             for final_upload_path in processed_paths:
