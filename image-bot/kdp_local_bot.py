@@ -74,146 +74,150 @@ def _detect_bg_color(img):
 
 
 def _flood_fill_remove_bg(img_bgra, bg_color, tol=7):
-    """Xóa nền bằng Flood-Fill từ 4 VIỀN ẢNH.
-    CHỈ xóa pixel liên thông với mép — KHÔNG bao giờ đụng pixel bên trong nhân vật.
-    Đây là điểm khác biệt quan trọng so với cv2.inRange toàn cục."""
+    """Xóa nền bằng Flood-Fill từ 4 VIỀN.
+    CHỈ xóa pixel liên thông với mép — không đụng bên trong nhân vật."""
     h, w = img_bgra.shape[:2]
     bgr = img_bgra[:, :, :3]
 
-    # Tạo binary mask: pixel nào nằm trong dải màu nền?
     lower = np.clip(bg_color.astype(int) - tol, 0, 255).astype(np.uint8)
     upper = np.clip(bg_color.astype(int) + tol, 0, 255).astype(np.uint8)
-    color_match = cv2.inRange(bgr, lower, upper)  # 255 = khớp màu nền
+    color_match = cv2.inRange(bgr, lower, upper)
 
-    # Tạo seed mask: chỉ giữ pixel khớp màu NẰM TRÊN VIỀN ẢNH
+    # Seed: chỉ pixel viền khớp màu
     seed = np.zeros_like(color_match)
-    seed[0, :] = color_match[0, :]        # viền trên
-    seed[-1, :] = color_match[-1, :]      # viền dưới
-    seed[:, 0] = color_match[:, 0]        # viền trái
-    seed[:, -1] = color_match[:, -1]      # viền phải
+    seed[0, :] = color_match[0, :]
+    seed[-1, :] = color_match[-1, :]
+    seed[:, 0] = color_match[:, 0]
+    seed[:, -1] = color_match[:, -1]
 
-    # Flood-fill: lan tỏa từ seed qua các pixel liên thông cùng khớp màu
-    # Dùng morphological reconstruction (cv2 không có sẵn, dùng vòng lặp dilate)
+    # Lan tỏa từ viền qua vùng liên thông cùng màu
     kernel = np.ones((3, 3), np.uint8)
     flood = seed.copy()
     while True:
         expanded = cv2.dilate(flood, kernel, iterations=1)
-        expanded = cv2.bitwise_and(expanded, color_match)  # chỉ lan vào vùng khớp màu
+        expanded = cv2.bitwise_and(expanded, color_match)
         if np.array_equal(expanded, flood):
             break
         flood = expanded
 
-    # Đục alpha chỉ ở vùng flood (liên thông viền)
     killed = cv2.countNonZero(flood)
     img_bgra[:, :, 3][flood == 255] = 0
     print(f"   🎯 Flood-fill: xóa {killed} px nền liên thông viền (BGR {bg_color}, ±{tol})")
     return img_bgra
 
 
+def _patch_small_holes(img_bgra):
+    """Vá lỗ thủng nhỏ (<2% diện tích) trong alpha mask.
+    Lỗ nhỏ = rembg đánh dấu sai. Lỗ lớn = khoảng trống thật (giữ nguyên)."""
+    alpha = img_bgra[:, :, 3]
+    total_area = alpha.shape[0] * alpha.shape[1]
+    max_hole = total_area * 0.02
+
+    alpha_bin = (alpha > 127).astype(np.uint8) * 255
+    alpha_inv = cv2.bitwise_not(alpha_bin)
+
+    contours, hierarchy = cv2.findContours(alpha_inv, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
+
+    patched = 0
+    if hierarchy is not None:
+        for i, c in enumerate(contours):
+            if hierarchy[0][i][3] != -1:  # Lỗ bên trong object
+                if cv2.contourArea(c) < max_hole:
+                    cv2.drawContours(alpha, [c], -1, 255, -1)
+                    patched += 1
+
+    img_bgra[:, :, 3] = alpha
+    print(f"   🩹 Vá {patched} lỗ thủng nhỏ (ngưỡng < 2% diện tích)")
+    return img_bgra
+
+
 def _smart_erode(img_bgra):
-    """Gọt viền thông minh: chỉ erode nếu không phá quá 10% pixel."""
+    """Gọt viền 1px nếu không phá quá 10% pixel."""
     b_c, g_c, r_c, a_c = cv2.split(img_bgra)
     kernel_cross = cv2.getStructuringElement(cv2.MORPH_CROSS, (3, 3))
     a_eroded = cv2.erode(a_c, kernel_cross, iterations=1)
 
-    total_opaque = cv2.countNonZero(a_c)
-    if total_opaque == 0:
+    total = cv2.countNonZero(a_c)
+    if total == 0:
         return img_bgra
 
-    lost = total_opaque - cv2.countNonZero(a_eroded)
-    loss_pct = (lost / total_opaque) * 100
+    lost = total - cv2.countNonZero(a_eroded)
+    pct = (lost / total) * 100
 
-    if loss_pct > 10:
-        print(f"   🛡️ Bỏ qua gọt viền (sẽ mất {loss_pct:.1f}% — nét quá mỏng)")
+    if pct > 10:
+        print(f"   🛡️ Bỏ qua gọt viền ({pct:.1f}% sẽ mất — nét quá mỏng)")
         return img_bgra
     else:
-        print(f"   ⛏️ Gọt viền 1px (mất {loss_pct:.1f}% — an toàn)")
+        print(f"   ⛏️ Gọt viền 1px ({pct:.1f}% — an toàn)")
         return cv2.merge([b_c, g_c, r_c, a_eroded])
 
 
-def _upscale_with_white_fill(img_bgra, env):
-    """Upscale x4→x2 AN TOÀN cho ảnh transparent.
-    
-    Trick: Lót nền TRẮNG trước khi bơm vào AI → AI không sinh rác đen.
-    Sau đó upscale alpha mask riêng bằng LANCZOS → ghép lại."""
-    b, g, r, alpha = cv2.split(img_bgra)
-    
-    # Tạo bản RGB trên nền trắng (AI sẽ xử lý bản này)
-    alpha_f = alpha.astype(np.float32) / 255.0
-    white_bg = np.ones_like(b, dtype=np.float32) * 255.0
-    r_comp = (r.astype(np.float32) * alpha_f + white_bg * (1.0 - alpha_f)).astype(np.uint8)
-    g_comp = (g.astype(np.float32) * alpha_f + white_bg * (1.0 - alpha_f)).astype(np.uint8)
-    b_comp = (b.astype(np.float32) * alpha_f + white_bg * (1.0 - alpha_f)).astype(np.uint8)
-    img_white_bg = cv2.merge([b_comp, g_comp, r_comp])
-
-    # Ghi tạm ra disk
-    with tempfile.NamedTemporaryFile(suffix='_white.png', delete=False) as tmp_in:
-        white_path = tmp_in.name
-    with tempfile.NamedTemporaryFile(suffix='_x4.png', delete=False) as tmp_out:
-        x4_path = tmp_out.name
+def _upscale_x4_to_x2(input_path):
+    """Upscale ảnh GỐC CÓ NỀN (x4→x2). Không có transparency = không có rác đen."""
+    input_path = os.path.abspath(input_path)
+    with tempfile.NamedTemporaryFile(suffix='_x4.png', delete=False) as tmp:
+        x4_path = tmp.name
 
     try:
-        cv2.imwrite(white_path, img_white_bg)
-
         cmd = [
             UPSCAYL_ENGINE_PATH,
-            '-i', os.path.abspath(white_path),
-            '-o', os.path.abspath(x4_path),
+            '-i', input_path,
+            '-o', x4_path,
             '-n', 'realesrgan-x4plus',
             '-t', '0',
             '-f', 'png'
         ]
-        result = subprocess.run(cmd, cwd=os.path.dirname(UPSCAYL_ENGINE_PATH), env=env,
+        result = subprocess.run(cmd, cwd=os.path.dirname(UPSCAYL_ENGINE_PATH), env=_ENV,
                                 stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-
         if result.returncode != 0 or not os.path.exists(x4_path):
             return None
 
-        img_x4_rgb = cv2.imread(x4_path, cv2.IMREAD_COLOR)
-        if img_x4_rgb is None:
+        img_x4 = cv2.imread(x4_path, cv2.IMREAD_UNCHANGED)
+        if img_x4 is None:
             return None
 
-        # Resize RGB x4 → x2
-        h4, w4 = img_x4_rgb.shape[:2]
-        img_x2_rgb = cv2.resize(img_x4_rgb, (w4 // 2, h4 // 2), interpolation=cv2.INTER_AREA)
-
-        # Resize Alpha mask riêng (không qua AI — dùng LANCZOS để giữ nét cạnh)
-        h_orig, w_orig = alpha.shape[:2]
-        target_w, target_h = w4 // 2, h4 // 2
-        alpha_x2 = cv2.resize(alpha, (target_w, target_h), interpolation=cv2.INTER_LANCZOS4)
-
-        # Ghép RGB đã upscale + Alpha đã resize
-        b2, g2, r2 = cv2.split(img_x2_rgb)
-        final = cv2.merge([b2, g2, r2, alpha_x2])
-
-        print(f"   📐 Upscale: {w_orig}x{h_orig} → {target_w}x{target_h} (x4→x2, nền trắng an toàn)")
-        return final
-
+        h, w = img_x4.shape[:2]
+        img_x2 = cv2.resize(img_x4, (w // 2, h // 2), interpolation=cv2.INTER_AREA)
+        print(f"   📐 {w//4}x{h//4} → {w//2}x{h//2} (x4→x2)")
+        return img_x2
     finally:
-        for p in [white_path, x4_path]:
-            if os.path.exists(p):
-                os.remove(p)
+        if os.path.exists(x4_path):
+            os.remove(x4_path)
 
 
 # ════════════════════════════════════════════════════════════════
-#  PIPELINE CHÍNH
+#  PIPELINE CHÍNH — LÀM NÉT TRƯỚC, CẮT SAU
 # ════════════════════════════════════════════════════════════════
 
 def _process_core(input_path):
-    """Pipeline hoàn chỉnh:
-    1. rembg cắt nền trên ảnh gốc (nhỏ, nhanh, chính xác)
-    2. Flood-fill chroma-key CHỈ từ viền (không đụng nội thất)
-    3. Smart erode (tự bỏ qua nếu nét mỏng)
-    4. Upscale x4→x2 trên nền trắng (chống rác đen AI)
+    """Pipeline tối ưu nhất:
+    1. Upscale x4→x2 ảnh gốc CÓ NỀN (AI làm nét sạch, không artifact)
+    2. rembg cắt nền trên ảnh HD (nhiều pixel → mask chính xác hơn)
+    3. Vá lỗ thủng nhỏ trong alpha mask
+    4. Flood-fill chroma-key CHỈ từ viền
+    5. Smart erode
     """
     img_goc = cv2.imread(input_path, cv2.IMREAD_UNCHANGED)
     if img_goc is None:
         return None
 
-    # ── BƯỚC 1: TÁCH NỀN ──
-    print("✂️ [1/5] rembg tách nền...")
-    with open(input_path, 'rb') as f:
+    # ── BƯỚC 1: LÀM NÉT TRƯỚC ──
+    print("📈 [1/5] Upscale x4→x2 ảnh gốc (có nền, không rác)...")
+    img_hd = _upscale_x4_to_x2(input_path)
+    if img_hd is None:
+        print("⚠️ Upscale thất bại, dùng resize LANCZOS4 thay thế")
+        h, w = img_goc.shape[:2]
+        img_hd = cv2.resize(img_goc, (w * 2, h * 2), interpolation=cv2.INTER_LANCZOS4)
+
+    # Ghi tạm bản HD ra disk để rembg đọc
+    tmp_hd_path = os.path.join(tempfile.gettempdir(), f"hd_{os.path.basename(input_path)}.png")
+    cv2.imwrite(tmp_hd_path, img_hd)
+
+    # ── BƯỚC 2: CẮT NỀN TRÊN BẢN HD ──
+    print("✂️ [2/5] rembg cắt nền trên bản HD (chính xác hơn gốc)...")
+    with open(tmp_hd_path, 'rb') as f:
         out_bytes = remove(f.read(), session=session, post_process_mask=False)
+    os.remove(tmp_hd_path)
 
     out_arr = np.frombuffer(out_bytes, dtype=np.uint8)
     transparent = cv2.imdecode(out_arr, cv2.IMREAD_UNCHANGED)
@@ -221,61 +225,30 @@ def _process_core(input_path):
     if transparent is None or transparent.shape[2] != 4:
         raise ValueError("rembg không trả về ảnh RGBA!")
 
-    # ── BƯỚC 1.5: VÁ LỖ THỦNG NHỎ TRONG ALPHA MASK ──
-    # rembg thường đánh dấu sai các chi tiết nhỏ (chữ, hoa văn) là "nền"
-    # → tạo lỗ thủng trong alpha mask. Ta lấp lại các lỗ NHỎ (<2% diện tích).
-    # Các khoảng trống LỚN (kẽ tay, kẽ chân) vẫn được giữ nguyên.
-    print("🩹 [1.5/5] Vá lỗ thủng nhỏ trong alpha mask (do rembg đánh dấu sai)...")
-    alpha = transparent[:, :, 3]
-    total_area = alpha.shape[0] * alpha.shape[1]
-    max_hole_area = total_area * 0.02  # Lỗ < 2% diện tích = lỗi rembg → lấp
+    # Ghép RGB từ bản HD (sắc nét) + Alpha từ rembg (chính xác)
+    # rembg thỉnh thoảng thay đổi RGB → ta chỉ lấy alpha, giữ RGB gốc HD
+    alpha_mask = transparent[:, :, 3]
+    b, g, r = cv2.split(img_hd[:, :, :3])
+    transparent = cv2.merge([b, g, r, alpha_mask])
 
-    # Tìm các vùng kín bên trong (lỗ thủng = vùng alpha=0 bị bao quanh bởi alpha>0)
-    # Đảo ngược mask: vùng trong suốt thành trắng, vùng mờ đục thành đen
-    alpha_bin = (alpha > 127).astype(np.uint8) * 255
-    alpha_inv = cv2.bitwise_not(alpha_bin)
+    # ── BƯỚC 3: VÁ LỖ THỦNG NHỎ ──
+    print("🩹 [3/5] Vá lỗ thủng nhỏ trong alpha mask...")
+    transparent = _patch_small_holes(transparent)
 
-    # Tìm contour các vùng trong suốt
-    contours, hierarchy = cv2.findContours(alpha_inv, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
-
-    patched_count = 0
-    if hierarchy is not None:
-        for i, contour in enumerate(contours):
-            # RETR_CCOMP: hierarchy[0][i][3] == -1 nghĩa là contour ngoài cùng (nền chính)
-            # hierarchy[0][i][3] != -1 nghĩa là contour con (lỗ bên trong object)
-            parent = hierarchy[0][i][3]
-            if parent != -1:  # Đây là lỗ bên trong, không phải nền ngoài
-                area = cv2.contourArea(contour)
-                if area < max_hole_area:
-                    cv2.drawContours(alpha, [contour], -1, 255, -1)  # Lấp lỗ
-                    patched_count += 1
-
-    transparent[:, :, 3] = alpha
-    print(f"   🩹 Đã vá {patched_count} lỗ thủng nhỏ (ngưỡng < {max_hole_area:.0f} px = 2% ảnh)")
-
-    # ── BƯỚC 2: FLOOD-FILL CHROMA-KEY TỪ VIỀN ──
-    print("🔫 [2/4] Flood-fill chroma-key (chỉ quét từ viền ảnh)...")
-    bg_color, confidence, adaptive_tol = _detect_bg_color(img_goc[:, :, :3])
+    # ── BƯỚC 4: FLOOD-FILL CHROMA-KEY TỪ VIỀN ──
+    print("🔫 [4/5] Flood-fill chroma-key (chỉ từ viền)...")
+    bg_color, confidence, adaptive_tol = _detect_bg_color(img_hd[:, :, :3])
     print(f"   🎨 Màu nền (BGR): {bg_color}, tin cậy: {confidence:.0%}, tol: ±{adaptive_tol}")
 
     if confidence < 0.40:
         print("   🛡️ Bỏ qua chroma-key (tin cậy <40%)")
-        clean = transparent
     else:
-        clean = _flood_fill_remove_bg(transparent, bg_color, tol=adaptive_tol)
+        transparent = _flood_fill_remove_bg(transparent, bg_color, tol=adaptive_tol)
 
-    # ── BƯỚC 3: GỌT VIỀN THÔNG MINH ──
-    clean = _smart_erode(clean)
+    # ── BƯỚC 5: GỌT VIỀN THÔNG MINH ──
+    transparent = _smart_erode(transparent)
 
-    # ── BƯỚC 4: UPSCALE TRÊN NỀN TRẮNG ──
-    print("📈 [4/4] Upscale x4→x2 (lót nền trắng chống rác đen)...")
-    upscaled = _upscale_with_white_fill(clean, _ENV)
-
-    if upscaled is None:
-        print("⚠️ Upscale thất bại, trả ảnh gốc đã cắt nền")
-        return clean
-
-    return upscaled
+    return transparent
 
 
 def _save_300dpi(img_bgra, output_path):
@@ -288,7 +261,6 @@ def _save_300dpi(img_bgra, output_path):
 # ════════════════════════════════════════════════════════════════
 
 def process_file(ten_file):
-    """Xử lý file từ thư mục watcher."""
     vao = os.path.join(THU_MUC_GOC, ten_file)
     ten_khong_duoi = ten_file.rsplit('.', 1)[0]
     ket_qua_path = os.path.join(THU_MUC_THANH_PHAM, ten_khong_duoi + '_VIP.png')
@@ -307,7 +279,6 @@ def process_file(ten_file):
 
 
 def process_single_image(input_path, output_path):
-    """Xử lý 1 ảnh được gọi từ main.py."""
     ten_file = os.path.basename(input_path)
     print(f"\n=====================================")
     print(f"🔥 XỬ LÝ: {ten_file}")
