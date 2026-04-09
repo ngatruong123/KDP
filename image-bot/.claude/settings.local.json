@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(\"/Applications/Topaz Gigapixel AI.app/Contents/MacOS/Topaz Gigapixel AI\" --help)",
+      "Bash(\"/Applications/Topaz Gigapixel AI.app/Contents/MacOS/Topaz Gigapixel AI\" -h)",
+      "Bash(timeout:*)",
+      "Bash(gtimeout:*)",
+      "Bash(perl -e 'alarm 15; exec @ARGV':*)"
+    ]
+  }
+}
