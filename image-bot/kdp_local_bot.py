@@ -74,8 +74,8 @@ def _detect_bg_color(img):
 
 
 def _flood_fill_remove_bg(img_bgra, bg_color, tol=7):
-    """Xóa nền bằng Flood-Fill từ 4 VIỀN.
-    CHỈ xóa pixel liên thông với mép — không đụng bên trong nhân vật."""
+    """Xóa nền bằng connectedComponents — CHỈ xóa vùng màu nền liên thông với viền ảnh.
+    Nhanh gấp 100x so với dilate loop, không treo máy."""
     h, w = img_bgra.shape[:2]
     bgr = img_bgra[:, :, :3]
 
@@ -83,22 +83,23 @@ def _flood_fill_remove_bg(img_bgra, bg_color, tol=7):
     upper = np.clip(bg_color.astype(int) + tol, 0, 255).astype(np.uint8)
     color_match = cv2.inRange(bgr, lower, upper)
 
-    # Seed: chỉ pixel viền khớp màu
-    seed = np.zeros_like(color_match)
-    seed[0, :] = color_match[0, :]
-    seed[-1, :] = color_match[-1, :]
-    seed[:, 0] = color_match[:, 0]
-    seed[:, -1] = color_match[:, -1]
+    # Tìm tất cả vùng liên thông trong color_match
+    num_labels, labels = cv2.connectedComponents(color_match, connectivity=8)
 
-    # Lan tỏa từ viền qua vùng liên thông cùng màu
-    kernel = np.ones((3, 3), np.uint8)
-    flood = seed.copy()
-    while True:
-        expanded = cv2.dilate(flood, kernel, iterations=1)
-        expanded = cv2.bitwise_and(expanded, color_match)
-        if np.array_equal(expanded, flood):
-            break
-        flood = expanded
+    # Gom các label chạm viền ảnh
+    edge_labels = set()
+    edge_labels.update(labels[0, :].flat)       # top
+    edge_labels.update(labels[-1, :].flat)      # bottom
+    edge_labels.update(labels[:, 0].flat)       # left
+    edge_labels.update(labels[:, -1].flat)      # right
+    edge_labels.discard(0)  # 0 = background (pixel không khớp màu)
+
+    if not edge_labels:
+        print(f"   🎯 Flood-fill: không có vùng nền liên thông viền")
+        return img_bgra
+
+    # Tạo mask: chỉ các vùng chạm viền
+    flood = np.isin(labels, list(edge_labels)).astype(np.uint8) * 255
 
     killed = cv2.countNonZero(flood)
     img_bgra[:, :, 3][flood == 255] = 0
@@ -167,9 +168,16 @@ def _upscale_x4_to_x2(input_path):
             '-t', '0',
             '-f', 'png'
         ]
-        result = subprocess.run(cmd, cwd=os.path.dirname(UPSCAYL_ENGINE_PATH), env=_ENV,
-                                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        try:
+            result = subprocess.run(cmd, cwd=os.path.dirname(UPSCAYL_ENGINE_PATH), env=_ENV,
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=120)
+        except subprocess.TimeoutExpired:
+            print(f"   ❌ Upscale timeout (>120s)")
+            return None
         if result.returncode != 0 or not os.path.exists(x4_path):
+            stderr_msg = result.stderr.decode(errors='ignore').strip()
+            if stderr_msg:
+                print(f"   ❌ Upscale lỗi: {stderr_msg[:200]}")
             return None
 
         img_x4 = cv2.imread(x4_path, cv2.IMREAD_UNCHANGED)

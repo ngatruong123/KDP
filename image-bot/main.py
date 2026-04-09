@@ -10,8 +10,8 @@ def _process_one(args):
     """Xử lý 1 ảnh (dùng cho ThreadPoolExecutor)"""
     file_path, processed_path = args
     print(f"🔪 Đang xử lý: {os.path.basename(file_path)}...")
-    process_single_image(file_path, processed_path)
-    return processed_path
+    result = process_single_image(file_path, processed_path)
+    return result  # None nếu thất bại
 
 async def main():
     parser = argparse.ArgumentParser(description="Image Bot Queue Worker")
