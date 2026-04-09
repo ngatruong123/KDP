@@ -111,8 +111,8 @@ def process_file(ten_file):
             is_dark_bg = int(dominant_bgr.mean()) < 60
 
             if is_dark_bg:
-                # Nền tối: chỉ dùng BGR tolerance chặt (±25) vì HSV không đáng tin ở vùng tối
-                bgr_tol = 25
+                # Nền tối: Thu hẹp độ rơ nhầm lẫn (TOL) xuống 7 để tránh cạp thủng các bóng râm hoặc đường viền kim cương mảnh màu xám đậm.
+                bgr_tol = 7
                 lower_bgr = np.clip(dominant_bgr.astype(int) - bgr_tol, 0, 255).astype(np.uint8)
                 upper_bgr = np.clip(dominant_bgr.astype(int) + bgr_tol, 0, 255).astype(np.uint8)
                 mask_bg = cv2.inRange(img_result[:, :, :3], lower_bgr, upper_bgr)
@@ -140,12 +140,12 @@ def process_file(ten_file):
             a_c[mask_bg == 255] = 0
             img_result = cv2.merge([b_c, g_c, r_c, a_c])
 
-        # MINIMUM (erode toàn bộ alpha 1px - co viền vào, xóa răng cưa)
-        print("🪄 Đang áp Minimum toàn bộ ảnh...")
-        b_f, g_f, r_f, a_f = cv2.split(img_result)
-        kernel_min = np.ones((2, 2), np.uint8)
-        a_f = cv2.erode(a_f, kernel_min, iterations=1)
-        img_result = cv2.merge([b_f, g_f, r_f, a_f])
+        # Bỏ qua bước Erode (Co viền) vì các nét chữ bằng kim cương quá mỏng, co lại sẽ mất tích
+        # print("🪄 Đang áp Minimum toàn bộ ảnh...")
+        # b_f, g_f, r_f, a_f = cv2.split(img_result)
+        # kernel_min = np.ones((2, 2), np.uint8)
+        # a_f = cv2.erode(a_f, kernel_min, iterations=1)
+        # img_result = cv2.merge([b_f, g_f, r_f, a_f])
 
         # Save 300dpi
         img_rgba = cv2.cvtColor(img_result, cv2.COLOR_BGRA2RGBA)
@@ -256,8 +256,8 @@ def process_single_image(input_path, output_path):
                                   min(255, int(dominant_hsv[2]) + v_tol)], dtype=np.uint8)
             mask_hsv = cv2.inRange(img_hsv, lower_hsv, upper_hsv)
 
-            # BGR backup (±50)
-            bgr_tol = 50
+            # BGR backup (±7)
+            bgr_tol = 7
             lower_bgr = np.clip(dominant_bgr.astype(int) - bgr_tol, 0, 255).astype(np.uint8)
             upper_bgr = np.clip(dominant_bgr.astype(int) + bgr_tol, 0, 255).astype(np.uint8)
             mask_bgr = cv2.inRange(img_result[:, :, :3], lower_bgr, upper_bgr)
@@ -269,12 +269,12 @@ def process_single_image(input_path, output_path):
             a_c[mask_bg == 255] = 0
             img_result = cv2.merge([b_c, g_c, r_c, a_c])
 
-        # MINIMUM (erode toàn bộ alpha ~0.5px - co viền vào, xóa răng cưa)
-        print("🪄 Đang áp Minimum toàn bộ ảnh...")
-        b_f, g_f, r_f, a_f = cv2.split(img_result)
-        kernel_min = np.ones((2, 2), np.uint8)
-        a_f = cv2.erode(a_f, kernel_min, iterations=1)
-        img_result = cv2.merge([b_f, g_f, r_f, a_f])
+        # Bỏ qua Erode để bảo toàn nét mảnh
+        # print("🪄 Đang áp Minimum toàn bộ ảnh...")
+        # b_f, g_f, r_f, a_f = cv2.split(img_result)
+        # kernel_min = np.ones((2, 2), np.uint8)
+        # a_f = cv2.erode(a_f, kernel_min, iterations=1)
+        # img_result = cv2.merge([b_f, g_f, r_f, a_f])
 
         # Save 300dpi
         img_rgba = cv2.cvtColor(img_result, cv2.COLOR_BGRA2RGBA)
