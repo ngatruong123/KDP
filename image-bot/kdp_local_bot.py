@@ -38,24 +38,21 @@ _ENV["PYTHONUTF8"] = "1"
 # ════════════════════════════════════════════════════════════════
 
 
-def _apply_bg_removal(img_bgra, bg_color, tol=10):
-    """Xoá nền đơn sắc chắc chắn 100%:
-    - Pixel RGB trùng màu nền ±tol → alpha=0 (BẤT KỂ rembg nói gì)
-    - Pixel RGB không trùng nền → giữ nguyên alpha từ rembg
-    Sau đó Minimum 1px (erode ELLIPSE) làm mượt viền."""
-    lower = np.clip(bg_color.astype(int) - tol, 0, 255).astype(np.uint8)
-    upper = np.clip(bg_color.astype(int) + tol, 0, 255).astype(np.uint8)
-    bg_mask = cv2.inRange(img_bgra[:, :, :3], lower, upper)
-
-    killed = cv2.countNonZero(bg_mask)
-    img_bgra[:, :, 3][bg_mask == 255] = 0
-
-    # Minimum 1px (Photoshop) = erode ELLIPSE → viền mượt, không răng cưa
+def _minimum_edges(img_bgra):
+    """Minimum 1px (Photoshop) trên viền NGOÀI — mượt viền rembg, không đụng bên trong."""
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
     img_bgra[:, :, 3] = cv2.erode(img_bgra[:, :, 3], kernel, iterations=1)
+    return img_bgra
 
+
+def _remove_bg_pixels(img_bgra, lower, upper):
+    """Xoá mọi pixel RGB nằm trong [lower, upper] → alpha=0.
+    Áp dụng SAU Minimum để lỗ bên trong không bị erode phóng to."""
+    bg_mask = cv2.inRange(img_bgra[:, :, :3], lower, upper)
+    killed = cv2.countNonZero(bg_mask)
+    img_bgra[:, :, 3][bg_mask == 255] = 0
     total_px = img_bgra.shape[0] * img_bgra.shape[1]
-    print(f"   🎯 Xoá {killed}/{total_px} px trùng nền (BGR {bg_color} ±{tol}) + Minimum 1px")
+    print(f"   🎯 Xoá {killed}/{total_px} px nền (range [{lower}]-[{upper}])")
     return img_bgra
 
 
@@ -131,8 +128,9 @@ def _color_bleed_and_upscale(img_bgra):
 #  PIPELINE CHÍNH — PHOENIX (Tái sinh từ đống tro tàn)
 # ════════════════════════════════════════════════════════════════
 
-def _detect_bg_color(img):
-    """Chấm màu nền dominant từ 4 góc ảnh."""
+def _detect_bg_range(img):
+    """Đo chính xác range [min, max] per-channel của pixel nền từ 4 góc.
+    Trả về (lower, upper, bg_color): range thật 100% của nền, không đoán tolerance."""
     h, w = img.shape[:2]
     cs = max(8, min(h, w) // 15)
     tl = img[0:cs, 0:cs, :3].reshape(-1, 3)
@@ -141,26 +139,32 @@ def _detect_bg_color(img):
     br = img[-cs:, -cs:, :3].reshape(-1, 3)
     samples = np.concatenate([tl, tr, bl, br], axis=0)
 
+    # Lọc outlier: chỉ lấy pixel trong nhóm dominant (loại bỏ nếu góc có chi tiết design)
     quantized = (samples // 16).astype(np.uint32)
     packed = (quantized[:, 0] << 16) | (quantized[:, 1] << 8) | quantized[:, 2]
     values, counts = np.unique(packed, return_counts=True)
-    best_idx = counts.argmax()
-    dominant_packed = values[best_idx]
-    confidence = float(counts[best_idx]) / float(len(packed))
+    dominant_packed = values[counts.argmax()]
 
-    b = int((dominant_packed >> 16) & 0xFF) * 16 + 8
-    g = int((dominant_packed >> 8) & 0xFF) * 16 + 8
-    r = int(dominant_packed & 0xFF) * 16 + 8
-    return np.array([b, g, r], dtype=np.uint8), confidence
+    # Chỉ giữ pixel thuộc nhóm dominant (cùng bucket 16x16x16)
+    dominant_mask = packed == dominant_packed
+    dominant_samples = samples[dominant_mask]
+
+    # Range thật per-channel: min và max thực tế của pixel nền
+    lower = dominant_samples.min(axis=0).astype(np.uint8)
+    upper = dominant_samples.max(axis=0).astype(np.uint8)
+    bg_color = dominant_samples.mean(axis=0).astype(np.uint8)
+
+    return lower, upper, bg_color
 
 
 
 def _process_core(input_path):
     """Pipeline cho ảnh nền đơn sắc:
-    1. Detect màu nền từ 4 góc
+    1. Detect range màu nền thật từ 4 góc
     2. rembg → alpha mask, giữ RGB gốc
-    3. Xoá MỌI pixel trùng bg ±10 (chắc chắn 100%) + Minimum 1px
-    4. Inpaint color bleed + AI Upscale x4→x2
+    3. Minimum 1px (mượt viền ngoài)
+    4. Xoá mọi pixel RGB trong range nền (100% chính xác, không phóng to lỗ)
+    5. Inpaint color bleed + AI Upscale x4→x2
     """
     img_data = np.fromfile(input_path, dtype=np.uint8)
     if img_data.size == 0:
@@ -171,8 +175,8 @@ def _process_core(input_path):
         return None
 
     # ── BƯỚC 1: DETECT MÀU NỀN ──
-    bg_color, confidence = _detect_bg_color(img_goc)
-    print(f"   🎨 Màu nền (BGR): {bg_color}, tin cậy: {confidence:.0%}")
+    lower, upper, bg_color = _detect_bg_range(img_goc)
+    print(f"   🎨 Màu nền (BGR): {bg_color}, range thật: [{lower}]-[{upper}]")
 
     # ── BƯỚC 2: CẮT NỀN (ISNET) ──
     print("✂️ [1/5] rembg (ISNet) tách nền trên ảnh gốc...")
@@ -189,13 +193,16 @@ def _process_core(input_path):
     b_goc, g_goc, r_goc = cv2.split(img_goc[:, :, :3])
     transparent = cv2.merge([b_goc, g_goc, r_goc, transparent[:, :, 3]])
 
-    # ── BƯỚC 3: XOÁ NỀN ĐƠN SẮC + MINIMUM ──
-    # Mọi pixel RGB trùng bg ±10 → alpha=0. Không trùng → giữ nguyên alpha rembg.
-    print("🔫 [2/4] Xoá pixel trùng màu nền + Minimum 1px...")
-    transparent = _apply_bg_removal(transparent, bg_color, tol=10)
+    # ── BƯỚC 3: MINIMUM 1px — mượt viền rembg ──
+    print("⛏️ [2/5] Minimum 1px (mượt viền)...")
+    transparent = _minimum_edges(transparent)
 
-    # ── BƯỚC 4: INPAINT COLOR BLEED + AI UPSCALE ──
-    print("📈 [3/5] Color Bleed & Upscale AI x4→x2...")
+    # ── BƯỚC 4: XOÁ NỀN ĐƠN SẮC (sau Minimum để lỗ trong không bị phóng to) ──
+    print(f"🔫 [3/5] Xoá pixel nền [{lower}]-[{upper}]...")
+    transparent = _remove_bg_pixels(transparent, lower, upper)
+
+    # ── BƯỚC 5: INPAINT COLOR BLEED + AI UPSCALE ──
+    print("📈 [4/5] Color Bleed & Upscale AI x4→x2...")
     upscaled = _color_bleed_and_upscale(transparent)
 
     if upscaled is None:
