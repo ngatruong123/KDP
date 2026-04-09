@@ -144,7 +144,7 @@ class GoogleManager:
             elif "/folders/" in raw_link:
                 file_id = raw_link.split("/folders/")[1].split("?")[0].split("/")[0]
             return file_id.split("&")[0]
-        except: return raw_link
+        except Exception: return raw_link
 
     def expand_folder_into_jobs(self, row_num, folder_id, original_row_dict):
         """Hút sạch hình ảnh trong Folder và bơm ngược xuống đáy Bảng tính làm thức ăn cho Nông trại"""

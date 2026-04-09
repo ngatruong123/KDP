@@ -5,7 +5,6 @@ from google_api import GoogleManager
 from bot import ImageBotCore
 from kdp_local_bot import process_single_image
 from concurrent.futures import ProcessPoolExecutor
-import shutil
 
 def _process_one(args):
     """Top-level function để ProcessPoolExecutor pickle được"""
@@ -55,7 +54,6 @@ async def main():
         so_luong = job['so_luong']
         tong_so_luong = job['tong_so_luong']
         download_reso = job['download_reso']
-        aspect_ratio = job['aspect_ratio']
         
         print(f"\n======================================")
         print(f"⚙️ NHẬN LỆNH DÒNG {row_num} (ID ẢNH: {id_goc[:8]}...)")
