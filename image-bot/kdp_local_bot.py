@@ -49,15 +49,21 @@ def _minimum_05px(img_bgra):
     return img_bgra
 
 
-def _remove_bg_pixels(img_bgra, lower, upper):
-    """Xoá mọi pixel RGB nằm trong [lower, upper] → alpha=0.
-    Áp dụng SAU Minimum để lỗ bên trong không bị erode phóng to."""
-    bg_mask = cv2.inRange(img_bgra[:, :, :3], lower, upper)
+def _pure_color_cut(img_bgr, lower, upper):
+    """Cắt nền thuần màu — KHÔNG dùng rembg:
+    - Pixel RGB trong [lower, upper] → alpha=0 (nền)
+    - Pixel RGB ngoài range → alpha=255 (giữ)
+    100% chính xác cho nền đơn sắc. Không mất chi tiết không phải nền."""
+    bg_mask = cv2.inRange(img_bgr[:, :, :3], lower, upper)
+    alpha = np.where(bg_mask == 255, 0, 255).astype(np.uint8)
+
+    b, g, r = cv2.split(img_bgr[:, :, :3])
+    result = cv2.merge([b, g, r, alpha])
+
     killed = cv2.countNonZero(bg_mask)
-    img_bgra[:, :, 3][bg_mask == 255] = 0
-    total_px = img_bgra.shape[0] * img_bgra.shape[1]
-    print(f"   🎯 Xoá {killed}/{total_px} px nền (range [{lower}]-[{upper}])")
-    return img_bgra
+    total = img_bgr.shape[0] * img_bgr.shape[1]
+    print(f"   🎯 Xoá {killed}/{total} px nền (range [{lower}]-[{upper}])")
+    return result
 
 
 
@@ -163,12 +169,11 @@ def _detect_bg_range(img):
 
 
 def _process_core(input_path):
-    """Pipeline cho ảnh nền đơn sắc:
+    """Pipeline cho ảnh nền đơn sắc (KHÔNG dùng rembg):
     1. Detect range màu nền thật từ 4 góc
-    2. rembg → alpha mask, giữ RGB gốc
-    3. Xoá mọi pixel RGB trong range nền (100% chính xác)
-    4. Minimum 0.5px (mượt viền sau cắt, như Photoshop)
-    5. Inpaint color bleed + AI Upscale x4→x2
+    2. Pure color cut: pixel = nền → xoá, pixel ≠ nền → giữ
+    3. Minimum 0.5px (mượt viền, như Photoshop)
+    4. Inpaint color bleed + AI Upscale x4→x2
     """
     img_data = np.fromfile(input_path, dtype=np.uint8)
     if img_data.size == 0:
@@ -182,31 +187,16 @@ def _process_core(input_path):
     lower, upper, bg_color = _detect_bg_range(img_goc)
     print(f"   🎨 Màu nền (BGR): {bg_color}, range thật: [{lower}]-[{upper}]")
 
-    # ── BƯỚC 2: CẮT NỀN (ISNET) ──
-    print("✂️ [1/5] rembg (ISNet) tách nền trên ảnh gốc...")
-    with open(input_path, 'rb') as f:
-        out_bytes = remove(f.read(), session=session, post_process_mask=False)
+    # ── BƯỚC 2: CẮT NỀN THUẦN MÀU (không rembg) ──
+    print(f"🔫 [1/3] Cắt nền [{lower}]-[{upper}]...")
+    transparent = _pure_color_cut(img_goc, lower, upper)
 
-    out_arr = np.frombuffer(out_bytes, dtype=np.uint8)
-    transparent = cv2.imdecode(out_arr, cv2.IMREAD_UNCHANGED)
-
-    if transparent is None or transparent.shape[2] != 4:
-        raise ValueError("rembg không trả về ảnh RGBA!")
-
-    # Lấy RGB TỪ ẢNH GỐC (rembg đôi khi tẩy màu sai)
-    b_goc, g_goc, r_goc = cv2.split(img_goc[:, :, :3])
-    transparent = cv2.merge([b_goc, g_goc, r_goc, transparent[:, :, 3]])
-
-    # ── BƯỚC 3: XOÁ NỀN ĐƠN SẮC ──
-    print(f"🔫 [2/5] Xoá pixel nền [{lower}]-[{upper}]...")
-    transparent = _remove_bg_pixels(transparent, lower, upper)
-
-    # ── BƯỚC 4: MINIMUM 0.5px — mượt viền sau cắt ──
-    print("⛏️ [3/5] Minimum 0.5px (mượt viền)...")
+    # ── BƯỚC 3: MINIMUM 0.5px ──
+    print("⛏️ [2/3] Minimum 0.5px (mượt viền)...")
     transparent = _minimum_05px(transparent)
 
-    # ── BƯỚC 5: INPAINT COLOR BLEED + AI UPSCALE ──
-    print("📈 [4/5] Color Bleed & Upscale AI x4→x2...")
+    # ── BƯỚC 4: INPAINT COLOR BLEED + AI UPSCALE ──
+    print("📈 [3/3] Color Bleed & Upscale AI x4→x2...")
     upscaled = _color_bleed_and_upscale(transparent)
 
     if upscaled is None:
