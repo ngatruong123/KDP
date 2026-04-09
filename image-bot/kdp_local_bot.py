@@ -77,14 +77,14 @@ def _chroma_key(img_bgra, dominant_bgr):
 
     # Lớp 2: tìm rìa alpha (biên giữa transparent và opaque)
     alpha_binary = (a_c > 0).astype(np.uint8) * 255
-    kernel_edge = np.ones((13, 13), np.uint8)  # 6px quanh viền
+    kernel_edge = np.ones((7, 7), np.uint8)  # 3px quanh viền
     dilated = cv2.dilate(alpha_binary, kernel_edge, iterations=1)
     eroded = cv2.erode(alpha_binary, kernel_edge, iterations=1)
     edge_band = cv2.subtract(dilated, eroded)  # vùng 2px quanh viền
 
     # Trong vùng viền: hard-cut ΔE < 70
     edge_zone = edge_band > 0
-    edge_and_bg = edge_zone & (delta_e < 70)
+    edge_and_bg = edge_zone & (delta_e < 50)
     a_c[edge_and_bg] = 0
 
     edge_count = np.count_nonzero(edge_and_bg)
@@ -176,7 +176,7 @@ def process_file(ten_file):
         # MINIMUM (erode toàn bộ alpha 1px - co viền vào, xóa răng cưa)
         print("🪄 Đang áp Minimum toàn bộ ảnh...")
         b_f, g_f, r_f, a_f = cv2.split(img_result)
-        kernel_min = np.ones((3, 3), np.uint8)
+        kernel_min = np.ones((2, 2), np.uint8)
         a_f = cv2.erode(a_f, kernel_min, iterations=1)
         img_result = cv2.merge([b_f, g_f, r_f, a_f])
 
@@ -251,7 +251,7 @@ def process_single_image(input_path, output_path):
         # MINIMUM (erode toàn bộ alpha ~0.5px - co viền vào, xóa răng cưa)
         print("🪄 Đang áp Minimum toàn bộ ảnh...")
         b_f, g_f, r_f, a_f = cv2.split(img_result)
-        kernel_min = np.ones((3, 3), np.uint8)
+        kernel_min = np.ones((2, 2), np.uint8)
         a_f = cv2.erode(a_f, kernel_min, iterations=1)
         img_result = cv2.merge([b_f, g_f, r_f, a_f])
 
