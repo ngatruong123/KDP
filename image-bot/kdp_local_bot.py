@@ -36,33 +36,41 @@ if not os.path.exists(UPSCAYL_ENGINE_PATH):
     print(f"Vui lòng kiểm tra lại đường dẫn: {UPSCAYL_ENGINE_PATH}")
     raise RuntimeError("Không tìm thấy engine upscale")
 
-from collections import Counter
-
 def _detect_bg_color(img_bgr):
-    """Detect màu nền dominant từ viền ảnh. Return (dominant_bgr, ratio) — ratio = tỉ lệ pixel viền khớp."""
+    """Detect màu nền bằng median của border pixels — chính xác hơn quantize."""
     h_img, w_img = img_bgr.shape[:2]
     margin = max(5, min(h_img, w_img) // 20)
     samples = []
-    samples.extend(img_bgr[0:margin, :, :3].reshape(-1, 3).tolist())
-    samples.extend(img_bgr[-margin:, :, :3].reshape(-1, 3).tolist())
-    samples.extend(img_bgr[margin:-margin, 0:margin, :3].reshape(-1, 3).tolist())
-    samples.extend(img_bgr[margin:-margin, -margin:, :3].reshape(-1, 3).tolist())
-    samples_arr = np.array(samples, dtype=np.uint8)
-    quantized = (samples_arr // 16) * 16 + 8
-    color_counts = Counter([tuple(c) for c in quantized.tolist()])
-    top_color, top_count = color_counts.most_common(1)[0]
-    dominant_bgr = np.array(top_color, dtype=np.uint8)
-    ratio = top_count / len(samples)
+    samples.append(img_bgr[0:margin, :, :3].reshape(-1, 3))
+    samples.append(img_bgr[-margin:, :, :3].reshape(-1, 3))
+    samples.append(img_bgr[margin:-margin, 0:margin, :3].reshape(-1, 3))
+    samples.append(img_bgr[margin:-margin, -margin:, :3].reshape(-1, 3))
+    samples_arr = np.concatenate(samples, axis=0)
+
+    # Median — robust với JPEG noise
+    dominant_bgr = np.median(samples_arr, axis=0).astype(np.uint8)
+
+    # Tính ratio: bao nhiêu % pixel viền gần median (ΔE < 30 trong LAB)
+    samples_lab = cv2.cvtColor(samples_arr.reshape(-1, 1, 3), cv2.COLOR_BGR2LAB).astype(np.float32).reshape(-1, 3)
+    bg_lab = cv2.cvtColor(dominant_bgr.reshape(1, 1, 3), cv2.COLOR_BGR2LAB).astype(np.float32)[0][0]
+    diffs = np.sqrt(np.sum((samples_lab - bg_lab) ** 2, axis=1))
+    ratio = np.count_nonzero(diffs < 30) / len(diffs)
+
     return dominant_bgr, ratio
 
 
 def _chroma_key(img_bgra, dominant_bgr):
     """
-    2 lớp xử lý:
-    1) Toàn ảnh: ΔE < 12 → xóa (chỉ pixel gần giống 100% nền)
-    2) Viền: tìm rìa alpha, clean thêm 2px quanh viền với ΔE < 30
+    Pipeline sạch 5 bước:
+    1) Pre-blur → ΔE đồng nhất hơn (giảm JPEG noise)
+    2) Global chroma-key ΔE < 38
+    3) Edge cleanup ΔE < 50 (3px band)
+    4) Despill — trừ màu nền khỏi RGB ở vùng viền
+    5) Morphological clean — lấp lỗ nhỏ, xóa chấm lấm tấm
     """
-    img_lab = cv2.cvtColor(img_bgra[:, :, :3], cv2.COLOR_BGR2LAB).astype(np.float32)
+    # === 1. Pre-blur để giảm JPEG noise trước khi tính ΔE ===
+    img_blurred = cv2.GaussianBlur(img_bgra[:, :, :3], (3, 3), 0)
+    img_lab = cv2.cvtColor(img_blurred, cv2.COLOR_BGR2LAB).astype(np.float32)
     bg_lab = cv2.cvtColor(dominant_bgr.reshape(1, 1, 3), cv2.COLOR_BGR2LAB).astype(np.float32)[0][0]
 
     diff = img_lab - bg_lab
@@ -70,25 +78,53 @@ def _chroma_key(img_bgra, dominant_bgr):
 
     b_c, g_c, r_c, a_c = cv2.split(img_bgra)
 
-    # Lớp 1: toàn ảnh — cắt pixel giống nền (ΔE < 28)
+    # === 2. Global chroma-key ΔE < 38 ===
     global_mask = delta_e < 38
     a_c[global_mask] = 0
     global_count = np.count_nonzero(global_mask)
 
-    # Lớp 2: tìm rìa alpha (biên giữa transparent và opaque)
+    # === 3. Edge cleanup ΔE < 50 trong 3px band ===
     alpha_binary = (a_c > 0).astype(np.uint8) * 255
-    kernel_edge = np.ones((7, 7), np.uint8)  # 3px quanh viền
+    kernel_edge = np.ones((7, 7), np.uint8)
     dilated = cv2.dilate(alpha_binary, kernel_edge, iterations=1)
     eroded = cv2.erode(alpha_binary, kernel_edge, iterations=1)
-    edge_band = cv2.subtract(dilated, eroded)  # vùng 2px quanh viền
-
-    # Trong vùng viền: hard-cut ΔE < 70
+    edge_band = cv2.subtract(dilated, eroded)
     edge_zone = edge_band > 0
     edge_and_bg = edge_zone & (delta_e < 50)
     a_c[edge_and_bg] = 0
-
     edge_count = np.count_nonzero(edge_and_bg)
-    print(f"   🔬 LAB ΔE: {global_count} pixel nền xóa + {edge_count} pixel viền clean")
+
+    # === 4. Despill — trừ màu nền khỏi RGB ở vùng viền ===
+    # Tìm pixel viền còn sống (alpha > 0 và gần viền)
+    alpha_binary2 = (a_c > 0).astype(np.uint8) * 255
+    kernel_despill = np.ones((5, 5), np.uint8)
+    dilated2 = cv2.dilate(alpha_binary2, kernel_despill, iterations=1)
+    eroded2 = cv2.erode(alpha_binary2, kernel_despill, iterations=1)
+    despill_band = cv2.subtract(dilated2, eroded2)
+    despill_zone = (despill_band > 0) & (a_c > 0)
+
+    if np.any(despill_zone):
+        # Tính tỉ lệ pha trộn dựa trên ΔE: gần nền → despill mạnh
+        despill_strength = np.clip(1.0 - (delta_e / 80.0), 0, 1)
+        bg_float = dominant_bgr.astype(np.float32)
+        for ch_idx, ch in enumerate([b_c, g_c, r_c]):
+            ch_float = ch.astype(np.float32)
+            # Trừ phần pha trộn của màu nền ra khỏi pixel
+            corrected = ch_float - (bg_float[ch_idx] * despill_strength * 0.5)
+            ch_float[despill_zone] = corrected[despill_zone]
+            if ch_idx == 0:
+                b_c = np.clip(ch_float, 0, 255).astype(np.uint8)
+            elif ch_idx == 1:
+                g_c = np.clip(ch_float, 0, 255).astype(np.uint8)
+            else:
+                r_c = np.clip(ch_float, 0, 255).astype(np.uint8)
+
+    # === 5. Morphological clean ===
+    kernel_close = np.ones((3, 3), np.uint8)
+    a_c = cv2.morphologyEx(a_c, cv2.MORPH_CLOSE, kernel_close)  # lấp lỗ nhỏ
+    a_c = cv2.morphologyEx(a_c, cv2.MORPH_OPEN, kernel_close)   # xóa chấm lấm tấm
+
+    print(f"   🔬 LAB ΔE: {global_count} pixel nền xóa + {edge_count} pixel viền clean + despill + morph")
 
     return cv2.merge([b_c, g_c, r_c, a_c])
 
