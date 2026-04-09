@@ -71,7 +71,7 @@ def _chroma_key(img_bgra, dominant_bgr):
     b_c, g_c, r_c, a_c = cv2.split(img_bgra)
 
     # Lớp 1: toàn ảnh — cắt pixel giống nền (ΔE < 28)
-    global_mask = delta_e < 33
+    global_mask = delta_e < 38
     a_c[global_mask] = 0
     global_count = np.count_nonzero(global_mask)
 
@@ -84,11 +84,11 @@ def _chroma_key(img_bgra, dominant_bgr):
 
     # Trong vùng viền: cắt mạnh hơn (ΔE < 25) + fade
     edge_zone = edge_band > 0
-    edge_and_bg = edge_zone & (delta_e < 43)
-    fade_mask = edge_zone & (delta_e >= 33) & (delta_e < 43)
+    edge_and_bg = edge_zone & (delta_e < 48)
+    fade_mask = edge_zone & (delta_e >= 38) & (delta_e < 48)
     a_float = a_c.astype(np.float32)
-    a_float[edge_and_bg & (delta_e < 33)] = 0
-    fade_factor = (delta_e[fade_mask] - 33) / (43 - 33)
+    a_float[edge_and_bg & (delta_e < 38)] = 0
+    fade_factor = (delta_e[fade_mask] - 38) / (48 - 38)
     a_float[fade_mask] = a_float[fade_mask] * fade_factor
     a_c = np.clip(a_float, 0, 255).astype(np.uint8)
 
