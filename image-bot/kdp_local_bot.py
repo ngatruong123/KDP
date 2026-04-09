@@ -36,6 +36,95 @@ if not os.path.exists(UPSCAYL_ENGINE_PATH):
     print(f"Vui lòng kiểm tra lại đường dẫn: {UPSCAYL_ENGINE_PATH}")
     raise RuntimeError("Không tìm thấy engine upscale")
 
+from collections import Counter
+
+def _detect_bg_color(img_bgr):
+    """Detect màu nền dominant từ viền ảnh. Return (dominant_bgr, ratio) — ratio = tỉ lệ pixel viền khớp."""
+    h_img, w_img = img_bgr.shape[:2]
+    margin = max(5, min(h_img, w_img) // 20)
+    samples = []
+    samples.extend(img_bgr[0:margin, :, :3].reshape(-1, 3).tolist())
+    samples.extend(img_bgr[-margin:, :, :3].reshape(-1, 3).tolist())
+    samples.extend(img_bgr[margin:-margin, 0:margin, :3].reshape(-1, 3).tolist())
+    samples.extend(img_bgr[margin:-margin, -margin:, :3].reshape(-1, 3).tolist())
+    samples_arr = np.array(samples, dtype=np.uint8)
+    quantized = (samples_arr // 16) * 16 + 8
+    color_counts = Counter([tuple(c) for c in quantized.tolist()])
+    top_color, top_count = color_counts.most_common(1)[0]
+    dominant_bgr = np.array(top_color, dtype=np.uint8)
+    ratio = top_count / len(samples)
+    return dominant_bgr, ratio
+
+
+def _chroma_key(img_bgra, dominant_bgr):
+    """Xóa pixel khớp màu nền khỏi alpha channel. Trả về img_bgra đã clean."""
+    is_dark_bg = int(dominant_bgr.mean()) < 60
+
+    if is_dark_bg:
+        bgr_tol = 25
+        lower_bgr = np.clip(dominant_bgr.astype(int) - bgr_tol, 0, 255).astype(np.uint8)
+        upper_bgr = np.clip(dominant_bgr.astype(int) + bgr_tol, 0, 255).astype(np.uint8)
+        mask_bg = cv2.inRange(img_bgra[:, :, :3], lower_bgr, upper_bgr)
+    else:
+        dominant_hsv = cv2.cvtColor(dominant_bgr.reshape(1, 1, 3), cv2.COLOR_BGR2HSV)[0][0]
+        img_hsv = cv2.cvtColor(img_bgra[:, :, :3], cv2.COLOR_BGR2HSV)
+        h_tol, s_tol, v_tol = 15, 50, 50
+        lower_hsv = np.array([max(0, int(dominant_hsv[0]) - h_tol),
+                              max(0, int(dominant_hsv[1]) - s_tol),
+                              max(0, int(dominant_hsv[2]) - v_tol)], dtype=np.uint8)
+        upper_hsv = np.array([min(179, int(dominant_hsv[0]) + h_tol),
+                              min(255, int(dominant_hsv[1]) + s_tol),
+                              min(255, int(dominant_hsv[2]) + v_tol)], dtype=np.uint8)
+        mask_hsv = cv2.inRange(img_hsv, lower_hsv, upper_hsv)
+
+        bgr_tol = 40
+        lower_bgr = np.clip(dominant_bgr.astype(int) - bgr_tol, 0, 255).astype(np.uint8)
+        upper_bgr = np.clip(dominant_bgr.astype(int) + bgr_tol, 0, 255).astype(np.uint8)
+        mask_bgr = cv2.inRange(img_bgra[:, :, :3], lower_bgr, upper_bgr)
+
+        mask_bg = cv2.bitwise_or(mask_hsv, mask_bgr)
+
+    b_c, g_c, r_c, a_c = cv2.split(img_bgra)
+    a_c[mask_bg == 255] = 0
+    return cv2.merge([b_c, g_c, r_c, a_c])
+
+
+def _remove_bg(img_sharpened, sharpened_path, dominant_bgr, bg_ratio):
+    """
+    Tách nền: nếu nền đơn sắc rõ (>70% viền) → chỉ dùng chroma-key (skip rembg).
+    Ngược lại → rembg + chroma-key.
+    """
+    if bg_ratio >= 0.70:
+        # Nền đơn sắc rõ ràng → chroma-key trực tiếp, KHÔNG cần rembg
+        print(f"   🟢 Nền đơn sắc ({bg_ratio:.0%} viền khớp) → chỉ dùng Chroma-Key (bỏ qua rembg)")
+        h, w = img_sharpened.shape[:2]
+        alpha_full = np.full((h, w), 255, dtype=np.uint8)
+        img_bgra = cv2.merge([img_sharpened[:, :, 0], img_sharpened[:, :, 1], img_sharpened[:, :, 2], alpha_full])
+        return _chroma_key(img_bgra, dominant_bgr)
+    else:
+        # Nền phức tạp → dùng rembg lấy alpha + chroma-key bổ sung
+        print(f"   🔵 Nền không đơn sắc ({bg_ratio:.0%}) → dùng rembg + Chroma-Key")
+        with open(sharpened_path, 'rb') as i:
+            output_data = remove(i.read(), session=session, post_process_mask=False)
+        rembg_path = sharpened_path.rsplit('.', 1)[0] + '_rembg.png'
+        with open(rembg_path, 'wb') as o:
+            o.write(output_data)
+
+        img_rembg = cv2.imdecode(np.fromfile(rembg_path, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
+        if os.path.exists(rembg_path):
+            os.remove(rembg_path)
+
+        if img_rembg is not None and img_rembg.shape[2] == 4:
+            alpha_rembg = img_rembg[:, :, 3]
+            img_bgra = cv2.merge([img_sharpened[:, :, 0], img_sharpened[:, :, 1], img_sharpened[:, :, 2], alpha_rembg])
+        else:
+            img_bgra = img_rembg
+
+        if img_bgra is not None and img_bgra.shape[2] == 4:
+            img_bgra = _chroma_key(img_bgra, dominant_bgr)
+        return img_bgra
+
+
 def process_file(ten_file):
     vao = os.path.join(THU_MUC_GOC, ten_file)
     ten_khong_duoi = ten_file.rsplit('.', 1)[0]
@@ -69,75 +158,16 @@ def process_file(ten_file):
             print(f"⚠️ Không thấy Cục Output của Upscayl.")
             return
 
-        # --- BƯỚC 2: TÁCH NỀN (rembg + chroma-key) ---
+        # --- BƯỚC 2: TÁCH NỀN ---
         print("✂️ [2/3] Đang bóc nền...")
         img_upscaled = cv2.imdecode(np.fromfile(esrgan_out, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
         img_sharpened = img_upscaled
         cv2.imwrite(tam_path, img_sharpened)
-        img_goc = img_sharpened
 
-        with open(tam_path, 'rb') as i:
-            output_data = remove(i.read(), session=session, post_process_mask=False)
-        rembg_path = os.path.join(THU_MUC_TAM, ten_khong_duoi + '_rembg.png')
-        with open(rembg_path, 'wb') as o:
-            o.write(output_data)
+        dominant_bgr, bg_ratio = _detect_bg_color(img_sharpened)
+        print(f"   🎨 Màu nền (BGR): {dominant_bgr} — chiếm {bg_ratio:.0%} viền")
 
-        # Lấy alpha từ rembg, ghép với RGB đã sharpen
-        img_rembg = cv2.imdecode(np.fromfile(rembg_path, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
-        if img_rembg is not None and img_rembg.shape[2] == 4:
-            alpha_rembg = img_rembg[:, :, 3]
-            img_result = cv2.merge([img_sharpened[:, :, 0], img_sharpened[:, :, 1], img_sharpened[:, :, 2], alpha_rembg])
-        else:
-            img_result = img_rembg
-
-        # CHROMA-KEY: detect màu nền + xóa triệt để
-        from collections import Counter
-        if img_goc is not None and img_result is not None and img_result.shape[2] == 4:
-            h_img, w_img = img_goc.shape[:2]
-            margin = max(5, min(h_img, w_img) // 20)
-            samples = []
-            samples.extend(img_goc[0:margin, :, :3].reshape(-1, 3).tolist())
-            samples.extend(img_goc[-margin:, :, :3].reshape(-1, 3).tolist())
-            samples.extend(img_goc[margin:-margin, 0:margin, :3].reshape(-1, 3).tolist())
-            samples.extend(img_goc[margin:-margin, -margin:, :3].reshape(-1, 3).tolist())
-            samples_arr = np.array(samples, dtype=np.uint8)
-            quantized = (samples_arr // 16) * 16 + 8
-            color_counts = Counter([tuple(c) for c in quantized.tolist()])
-            dominant_bgr = np.array(color_counts.most_common(1)[0][0], dtype=np.uint8)
-            print(f"   🎨 Màu nền phát hiện (BGR): {dominant_bgr} - Chiếm {color_counts.most_common(1)[0][1]}/{len(samples)} pixel viền")
-
-            # Chroma-key: nền tối dùng BGR chặt, nền sáng dùng HSV+BGR
-            is_dark_bg = int(dominant_bgr.mean()) < 60
-
-            if is_dark_bg:
-                # Nền tối: chỉ dùng BGR tolerance chặt (±25) vì HSV không đáng tin ở vùng tối
-                bgr_tol = 25
-                lower_bgr = np.clip(dominant_bgr.astype(int) - bgr_tol, 0, 255).astype(np.uint8)
-                upper_bgr = np.clip(dominant_bgr.astype(int) + bgr_tol, 0, 255).astype(np.uint8)
-                mask_bg = cv2.inRange(img_result[:, :, :3], lower_bgr, upper_bgr)
-            else:
-                # Nền sáng: HSV + BGR
-                dominant_hsv = cv2.cvtColor(dominant_bgr.reshape(1, 1, 3), cv2.COLOR_BGR2HSV)[0][0]
-                img_hsv = cv2.cvtColor(img_result[:, :, :3], cv2.COLOR_BGR2HSV)
-                h_tol, s_tol, v_tol = 15, 50, 50
-                lower_hsv = np.array([max(0, int(dominant_hsv[0]) - h_tol),
-                                      max(0, int(dominant_hsv[1]) - s_tol),
-                                      max(0, int(dominant_hsv[2]) - v_tol)], dtype=np.uint8)
-                upper_hsv = np.array([min(179, int(dominant_hsv[0]) + h_tol),
-                                      min(255, int(dominant_hsv[1]) + s_tol),
-                                      min(255, int(dominant_hsv[2]) + v_tol)], dtype=np.uint8)
-                mask_hsv = cv2.inRange(img_hsv, lower_hsv, upper_hsv)
-
-                bgr_tol = 40
-                lower_bgr = np.clip(dominant_bgr.astype(int) - bgr_tol, 0, 255).astype(np.uint8)
-                upper_bgr = np.clip(dominant_bgr.astype(int) + bgr_tol, 0, 255).astype(np.uint8)
-                mask_bgr = cv2.inRange(img_result[:, :, :3], lower_bgr, upper_bgr)
-
-                mask_bg = cv2.bitwise_or(mask_hsv, mask_bgr)
-
-            b_c, g_c, r_c, a_c = cv2.split(img_result)
-            a_c[mask_bg == 255] = 0
-            img_result = cv2.merge([b_c, g_c, r_c, a_c])
+        img_result = _remove_bg(img_sharpened, tam_path, dominant_bgr, bg_ratio)
 
         # MINIMUM (erode toàn bộ alpha 1px - co viền vào, xóa răng cưa)
         print("🪄 Đang áp Minimum toàn bộ ảnh...")
@@ -152,10 +182,9 @@ def process_file(ten_file):
         pil_img.save(ket_qua_path, "PNG", dpi=(300, 300))
 
         # Dọn rác
-        os.remove(tam_path)
+        if os.path.exists(tam_path):
+            os.remove(tam_path)
         os.remove(esrgan_out)
-        if os.path.exists(rembg_path):
-            os.remove(rembg_path)
         os.remove(vao)
 
         print(f"🥇 HOÀN TẤT THẦN TỐC TẤM: {ten_file}!")
@@ -204,76 +233,16 @@ def process_single_image(input_path, output_path):
             print(f"⚠️ Không thấy output Upscayl.")
             return None
 
-        # --- BƯỚC 2: TÁCH NỀN (rembg + chroma-key) ---
+        # --- BƯỚC 2: TÁCH NỀN ---
         print("✂️ [2/3] Đang bóc nền...")
         img_upscaled = cv2.imdecode(np.fromfile(esrgan_out, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
         img_sharpened = img_upscaled
         cv2.imwrite(sharpened_path, img_sharpened)
-        img_goc = img_sharpened
 
-        with open(sharpened_path, 'rb') as i:
-            output_data = remove(i.read(), session=session, post_process_mask=False)
-        rembg_path = os.path.join(tmpdir, ten_khong_duoi + '_rembg.png')
-        with open(rembg_path, 'wb') as o:
-            o.write(output_data)
+        dominant_bgr, bg_ratio = _detect_bg_color(img_sharpened)
+        print(f"   🎨 Màu nền (BGR): {dominant_bgr} — chiếm {bg_ratio:.0%} viền")
 
-        # Lấy alpha từ rembg, ghép với RGB đã sharpen → giữ nguyên chất lượng màu
-        img_rembg = cv2.imdecode(np.fromfile(rembg_path, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
-        if img_rembg is not None and img_rembg.shape[2] == 4:
-            alpha_rembg = img_rembg[:, :, 3]
-            img_result = cv2.merge([img_sharpened[:, :, 0], img_sharpened[:, :, 1], img_sharpened[:, :, 2], alpha_rembg])
-        else:
-            img_result = img_rembg
-
-        # CHROMA-KEY: detect màu nền + xóa triệt để
-        from collections import Counter
-        if img_goc is not None and img_result is not None and img_result.shape[2] == 4:
-            h_img, w_img = img_goc.shape[:2]
-            margin = max(5, min(h_img, w_img) // 20)
-            samples = []
-            samples.extend(img_goc[0:margin, :, :3].reshape(-1, 3).tolist())
-            samples.extend(img_goc[-margin:, :, :3].reshape(-1, 3).tolist())
-            samples.extend(img_goc[margin:-margin, 0:margin, :3].reshape(-1, 3).tolist())
-            samples.extend(img_goc[margin:-margin, -margin:, :3].reshape(-1, 3).tolist())
-            samples_arr = np.array(samples, dtype=np.uint8)
-            quantized = (samples_arr // 16) * 16 + 8
-            color_counts = Counter([tuple(c) for c in quantized.tolist()])
-            dominant_bgr = np.array(color_counts.most_common(1)[0][0], dtype=np.uint8)
-            print(f"   🎨 Màu nền phát hiện (BGR): {dominant_bgr}")
-
-            # Chroma-key: nền tối dùng BGR chặt, nền sáng dùng HSV+BGR
-            is_dark_bg = int(dominant_bgr.mean()) < 60
-
-            if is_dark_bg:
-                # Nền tối: chỉ dùng BGR tolerance chặt (±25) vì HSV không đáng tin ở vùng tối
-                bgr_tol = 25
-                lower_bgr = np.clip(dominant_bgr.astype(int) - bgr_tol, 0, 255).astype(np.uint8)
-                upper_bgr = np.clip(dominant_bgr.astype(int) + bgr_tol, 0, 255).astype(np.uint8)
-                mask_bg = cv2.inRange(img_result[:, :, :3], lower_bgr, upper_bgr)
-            else:
-                # Nền sáng: HSV + BGR
-                dominant_hsv = cv2.cvtColor(dominant_bgr.reshape(1, 1, 3), cv2.COLOR_BGR2HSV)[0][0]
-                img_hsv = cv2.cvtColor(img_result[:, :, :3], cv2.COLOR_BGR2HSV)
-                h_tol, s_tol, v_tol = 15, 50, 50
-                lower_hsv = np.array([max(0, int(dominant_hsv[0]) - h_tol),
-                                      max(0, int(dominant_hsv[1]) - s_tol),
-                                      max(0, int(dominant_hsv[2]) - v_tol)], dtype=np.uint8)
-                upper_hsv = np.array([min(179, int(dominant_hsv[0]) + h_tol),
-                                      min(255, int(dominant_hsv[1]) + s_tol),
-                                      min(255, int(dominant_hsv[2]) + v_tol)], dtype=np.uint8)
-                mask_hsv = cv2.inRange(img_hsv, lower_hsv, upper_hsv)
-
-                bgr_tol = 40
-                lower_bgr = np.clip(dominant_bgr.astype(int) - bgr_tol, 0, 255).astype(np.uint8)
-                upper_bgr = np.clip(dominant_bgr.astype(int) + bgr_tol, 0, 255).astype(np.uint8)
-                mask_bgr = cv2.inRange(img_result[:, :, :3], lower_bgr, upper_bgr)
-
-                mask_bg = cv2.bitwise_or(mask_hsv, mask_bgr)
-
-            # Xóa alpha pixel khớp màu nền, giữ nguyên pixel khác
-            b_c, g_c, r_c, a_c = cv2.split(img_result)
-            a_c[mask_bg == 255] = 0
-            img_result = cv2.merge([b_c, g_c, r_c, a_c])
+        img_result = _remove_bg(img_sharpened, sharpened_path, dominant_bgr, bg_ratio)
 
         # MINIMUM (erode toàn bộ alpha ~0.5px - co viền vào, xóa răng cưa)
         print("🪄 Đang áp Minimum toàn bộ ảnh...")
