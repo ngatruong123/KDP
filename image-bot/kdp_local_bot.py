@@ -56,26 +56,37 @@ def _detect_bg_color(img_bgr):
     return dominant_bgr, ratio
 
 
-def _chroma_key(img_bgra, dominant_bgr, delta_e_threshold=20):
+def _chroma_key(img_bgra, dominant_bgr, hard_threshold=15, soft_threshold=25):
     """
-    Xóa pixel khớp màu nền bằng LAB ΔE (khoảng cách màu theo mắt người).
-    ΔE < threshold → coi là nền → xóa alpha.
-    Mặc định threshold=20: cắt sạch nền, giữ chi tiết gần màu nền.
+    Xóa pixel khớp màu nền bằng LAB ΔE + alpha mềm cho viền.
+    ΔE < hard_threshold → alpha = 0 (xóa hoàn toàn)
+    ΔE hard~soft → alpha giảm dần (viền mượt, không dính nền)
+    ΔE > soft_threshold → giữ nguyên
     """
-    # Chuyển ảnh và màu nền sang LAB
     img_lab = cv2.cvtColor(img_bgra[:, :, :3], cv2.COLOR_BGR2LAB).astype(np.float32)
     bg_lab = cv2.cvtColor(dominant_bgr.reshape(1, 1, 3), cv2.COLOR_BGR2LAB).astype(np.float32)[0][0]
 
-    # Tính ΔE cho mỗi pixel: sqrt((L1-L2)² + (a1-a2)² + (b1-b2)²)
     diff = img_lab - bg_lab
     delta_e = np.sqrt(np.sum(diff ** 2, axis=2))
 
-    # Pixel có ΔE < threshold → nền → xóa alpha
-    mask_bg = (delta_e < delta_e_threshold).astype(np.uint8) * 255
-    print(f"   🔬 LAB ΔE threshold={delta_e_threshold} — {np.count_nonzero(mask_bg)}/{mask_bg.size} pixel bị cắt ({np.count_nonzero(mask_bg)*100//mask_bg.size}%)")
-
     b_c, g_c, r_c, a_c = cv2.split(img_bgra)
-    a_c[mask_bg == 255] = 0
+    a_float = a_c.astype(np.float32)
+
+    # Hard cut: ΔE < hard → alpha = 0
+    a_float[delta_e < hard_threshold] = 0
+
+    # Soft transition: hard ≤ ΔE < soft → alpha giảm dần
+    transition = (delta_e >= hard_threshold) & (delta_e < soft_threshold)
+    fade = (delta_e[transition] - hard_threshold) / (soft_threshold - hard_threshold)
+    a_float[transition] = a_float[transition] * fade
+
+    a_c = np.clip(a_float, 0, 255).astype(np.uint8)
+
+    hard_count = np.count_nonzero(delta_e < hard_threshold)
+    soft_count = np.count_nonzero(transition)
+    total = delta_e.size
+    print(f"   🔬 LAB ΔE: {hard_count} pixel xóa hẳn + {soft_count} pixel fade viền ({(hard_count+soft_count)*100//total}% tổng)")
+
     return cv2.merge([b_c, g_c, r_c, a_c])
 
 
