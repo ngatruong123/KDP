@@ -82,15 +82,10 @@ def _chroma_key(img_bgra, dominant_bgr):
     eroded = cv2.erode(alpha_binary, kernel_edge, iterations=1)
     edge_band = cv2.subtract(dilated, eroded)  # vùng 2px quanh viền
 
-    # Trong vùng viền: cắt mạnh hơn (ΔE < 25) + fade
+    # Trong vùng viền: hard-cut ΔE < 70
     edge_zone = edge_band > 0
     edge_and_bg = edge_zone & (delta_e < 70)
-    fade_mask = edge_zone & (delta_e >= 38) & (delta_e < 70)
-    a_float = a_c.astype(np.float32)
-    a_float[edge_and_bg & (delta_e < 38)] = 0
-    fade_factor = (delta_e[fade_mask] - 38) / (70 - 38)
-    a_float[fade_mask] = a_float[fade_mask] * fade_factor
-    a_c = np.clip(a_float, 0, 255).astype(np.uint8)
+    a_c[edge_and_bg] = 0
 
     edge_count = np.count_nonzero(edge_and_bg)
     print(f"   🔬 LAB ΔE: {global_count} pixel nền xóa + {edge_count} pixel viền clean")
