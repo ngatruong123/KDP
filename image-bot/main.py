@@ -152,29 +152,24 @@ async def main():
             if failed_count > 0:
                 print(f"⚠️ {failed_count}/{len(raw_results)} ảnh xử lý THẤT BẠI — bỏ qua, KHÔNG upload ảnh lỗi")
 
-            # Upload ảnh upscaled (đã đè lên file gốc) ra folder chính
-            print(f"📦 Đang upload {len(output_files_paths)} ảnh upscaled...")
-            for file_path in output_files_paths:
+            # Upload ảnh upscaled vào subfolder _1.1, _1.2, ... (mỗi ảnh 1 folder)
+            print(f"📦 Đang upload {len(output_files_paths)} ảnh upscaled vào các subfolder...")
+            sub_folder_ids = gmanager.get_or_create_numbered_subfolders(job_specific_folder_id, len(output_files_paths))
+            for idx, file_path in enumerate(output_files_paths):
                 if os.path.exists(file_path):
-                    gmanager.upload_file_to_drive(file_path, os.path.basename(file_path), job_specific_folder_id)
+                    folder_id = sub_folder_ids[idx] if idx < len(sub_folder_ids) else job_specific_folder_id
+                    gmanager.upload_file_to_drive(file_path, os.path.basename(file_path), folder_id)
 
             if _skip_bg_removal:
-                # --no-cut: chỉ upload upscaled, không cần _Processed
                 link_share = f"https://drive.google.com/drive/folders/{job_specific_folder_id}"
             else:
-                # Tìm hoặc tạo subfolder _Processed
-                query = f"'{job_specific_folder_id}' in parents and name='_Processed' and mimeType='application/vnd.google-apps.folder' and trashed=false"
-                existing = gmanager.drive_service.files().list(q=query, fields="files(id)").execute().get('files', [])
-                if existing:
-                    processed_folder_id = existing[0]['id']
-                else:
-                    processed_folder_id, _ = gmanager.create_drive_folder("_Processed", job_specific_folder_id)
-
-                # Upload ảnh đã cắt nền vào _Processed
-                for final_upload_path in processed_paths:
+                # Upload ảnh đã cắt nền vào subfolder _1.1/_Processed, _1.2/_Processed, ...
+                for idx, final_upload_path in enumerate(processed_paths):
+                    parent_id = sub_folder_ids[idx] if idx < len(sub_folder_ids) else job_specific_folder_id
+                    proc_folder_id = gmanager.get_or_create_subfolder("_Processed", parent_id)
                     print(f"✅ Đang xách ảnh {os.path.basename(final_upload_path)} đưa lên Mây...")
-                    gmanager.upload_file_to_drive(final_upload_path, os.path.basename(final_upload_path), processed_folder_id)
-                link_share = f"https://drive.google.com/drive/folders/{processed_folder_id}"
+                    gmanager.upload_file_to_drive(final_upload_path, os.path.basename(final_upload_path), proc_folder_id)
+                link_share = f"https://drive.google.com/drive/folders/{job_specific_folder_id}"
 
             # Cập nhật kết quả
             consecutive_web_errors = 0  # Reset khi job thành công

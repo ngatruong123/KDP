@@ -426,6 +426,30 @@ class GoogleManager:
         file = _retry_api(_do_create, max_retries=3, label=f"CreateFolder {folder_name}")
         return file.get('id'), file.get('webViewLink')
 
+    def get_or_create_subfolder(self, name, parent_id):
+        """Tìm hoặc tạo subfolder theo tên trong parent."""
+        safe_name = name.replace("'", "\\'")
+        query = f"'{parent_id}' in parents and name='{safe_name}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
+        results = _retry_api(
+            lambda: self.drive_service.files().list(q=query, fields="files(id)").execute(),
+            max_retries=3, label=f"FindFolder {name}"
+        )
+        files = results.get('files', [])
+        if files:
+            return files[0]['id']
+        folder_id, _ = self.create_drive_folder(name, parent_id)
+        return folder_id
+
+    def get_or_create_numbered_subfolders(self, parent_id, count):
+        """Tìm hoặc tạo subfolder _1.1, _1.2, ... _1.{count} trong parent."""
+        folder_ids = []
+        for i in range(1, count + 1):
+            name = f"_1.{i}"
+            folder_id = self.get_or_create_subfolder(name, parent_id)
+            folder_ids.append(folder_id)
+            print(f"   📂 Subfolder {name}: {folder_id[:15]}...")
+        return folder_ids
+
     def resolve_output_folder(self, file_id, base_output_id):
         """Dynamic Routing: Finds the parent of the input file and routes the output to a {parent_name}_Out subfolder."""
         try:
