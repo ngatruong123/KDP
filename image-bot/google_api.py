@@ -144,16 +144,20 @@ class GoogleManager:
 
     def expand_folder_into_jobs(self, row_num, folder_id, original_row_dict):
         """Hút sạch hình ảnh trong Folder và bơm xuống đáy Bảng tính. KHÔNG đè link folder gốc."""
+        # Đánh dấu TRƯỚC khi bung — chống duplicate khi nhiều bot chạy song song
+        self.update_job_status(row_num, "Đang bung Folder... 📂")
+
         query = f"'{folder_id}' in parents and trashed=false and (mimeType contains 'image/jpeg' or mimeType contains 'image/png' or mimeType contains 'image/webp')"
         try:
             results = self.drive_service.files().list(q=query, fields="files(id, name)", pageSize=1000).execute()
             files = results.get('files', [])
-            if not files: return None
+            if not files:
+                self.update_job_status(row_num, "Folder rỗng ⚠️")
+                return None
 
             headers = self.worksheet.row_values(1)
-            first_file_id = files[0]['id']
 
-            # Append TẤT CẢ ảnh (kể cả ảnh đầu) thành dòng mới — KHÔNG đè dòng folder gốc
+            # Append TẤT CẢ ảnh thành dòng mới — KHÔNG đè dòng folder gốc
             new_rows_data = []
             for f in files:
                 row_arr = []
@@ -170,7 +174,6 @@ class GoogleManager:
                 self.worksheet.append_rows(new_rows_data, value_input_option='USER_ENTERED')
                 print(f"🎉 Đã bơm {len(new_rows_data)} tấm ảnh từ Folder xuống đáy Google Sheet!")
 
-            # Đánh dấu dòng folder gốc là đã xử lý — giữ nguyên link folder
             self.update_job_status(row_num, f"Đã bung {len(files)} ảnh ✅")
 
             return None  # Trả None để bot bỏ qua dòng folder, chạy các dòng ảnh mới
