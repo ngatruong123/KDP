@@ -321,16 +321,23 @@ def process_single_image(input_path, output_path, skip_bg_removal=False):
         img_upscaled = cv2.imdecode(np.fromfile(esrgan_out, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
         img_sharpened = img_upscaled
 
-        # Lưu bản upscaled (chưa cắt) đè lên file gốc để upload thay thế
-        upscaled_rgba = cv2.cvtColor(img_sharpened, cv2.COLOR_BGR2RGB) if img_sharpened.shape[2] == 3 else cv2.cvtColor(img_sharpened, cv2.COLOR_BGRA2RGBA)
-        Image.fromarray(upscaled_rgba).save(input_path, "PNG", dpi=(300, 300))
-        print(f"   📈 Đã lưu bản upscaled đè lên: {os.path.basename(input_path)}")
+        # Lưu bản upscaled (chưa cắt) đè lên file gốc dưới dạng JPG để giảm dung lượng upload
+        upscaled_rgb = cv2.cvtColor(img_sharpened, cv2.COLOR_BGR2RGB) if img_sharpened.shape[2] == 3 else cv2.cvtColor(img_sharpened, cv2.COLOR_BGRA2RGB)
+        # Đổi đuôi input_path sang .jpg
+        input_jpg = input_path.rsplit('.', 1)[0] + '.jpg'
+        Image.fromarray(upscaled_rgb).save(input_jpg, "JPEG", quality=95, dpi=(300, 300))
+        # Xoá file gốc nếu khác tên
+        if input_jpg != input_path and os.path.exists(input_path):
+            os.remove(input_path)
+        input_path = input_jpg
+        print(f"   📈 Đã lưu bản upscaled (JPG): {os.path.basename(input_path)}")
 
         if skip_bg_removal:
-            # Chỉ upscale, không cắt nền — lưu upscaled làm output
-            Image.fromarray(upscaled_rgba).save(output_path, "PNG", dpi=(300, 300))
-            print(f"🥇 HOÀN TẤT (chỉ upscale): {ten_file} → {os.path.basename(output_path)}")
-            return output_path
+            # Chỉ upscale, không cắt nền — lưu upscaled JPG làm output
+            output_jpg = output_path.rsplit('.', 1)[0] + '.jpg'
+            Image.fromarray(upscaled_rgb).save(output_jpg, "JPEG", quality=95, dpi=(300, 300))
+            print(f"🥇 HOÀN TẤT (chỉ upscale): {ten_file} → {os.path.basename(output_jpg)}")
+            return output_jpg
 
         cv2.imwrite(sharpened_path, img_sharpened)
 
