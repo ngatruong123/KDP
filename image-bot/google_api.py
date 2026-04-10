@@ -22,42 +22,46 @@ def _is_pid_alive(pid):
     """Kiểm tra process còn sống không — hoạt động trên cả Windows và Linux."""
     try:
         if os.name == 'nt':
-            # Windows: dùng tasklist thay vì os.kill
-            import subprocess
-            result = subprocess.run(['tasklist', '/FI', f'PID eq {pid}'], capture_output=True, text=True, timeout=5)
-            return str(pid) in result.stdout
+            import ctypes
+            kernel32 = ctypes.windll.kernel32
+            handle = kernel32.OpenProcess(0x100000, False, pid)  # SYNCHRONIZE
+            if handle:
+                kernel32.CloseHandle(handle)
+                return True
+            return False
         else:
             os.kill(pid, 0)
             return True
     except Exception:
         return False
 
+# Dọn lock cũ 1 lần duy nhất khi module được import
+def _cleanup_all_stale_locks():
+    os.makedirs(_LOCK_DIR, exist_ok=True)
+    for i in range(_MAX_CONCURRENT):
+        lock_file = os.path.join(_LOCK_DIR, f"slot_{i}.lock")
+        if os.path.exists(lock_file):
+            try:
+                with open(lock_file, 'r') as f:
+                    pid = int(f.read().strip())
+                if not _is_pid_alive(pid):
+                    os.remove(lock_file)
+            except Exception:
+                try: os.remove(lock_file)
+                except Exception: pass
+
+_cleanup_all_stale_locks()
+
 class _DriveBandwidthLimiter:
     """File-based semaphore để giới hạn số process gọi Drive API đồng thời."""
 
     def __init__(self):
-        os.makedirs(_LOCK_DIR, exist_ok=True)
         self._slot = None
-        # Dọn lock cũ từ process đã chết khi khởi tạo
-        self._cleanup_stale_locks()
-
-    def _cleanup_stale_locks(self):
-        """Xoá tất cả lock từ process đã chết."""
-        for i in range(_MAX_CONCURRENT):
-            lock_file = os.path.join(_LOCK_DIR, f"slot_{i}.lock")
-            if os.path.exists(lock_file):
-                try:
-                    with open(lock_file, 'r') as f:
-                        pid = int(f.read().strip())
-                    if not _is_pid_alive(pid):
-                        os.remove(lock_file)
-                except Exception:
-                    try: os.remove(lock_file)
-                    except Exception: pass
 
     def acquire(self, timeout=30):
         """Chờ đến khi có slot trống (tối đa 30s)."""
         start = time.time()
+        attempts = 0
         while time.time() - start < timeout:
             for i in range(_MAX_CONCURRENT):
                 lock_file = os.path.join(_LOCK_DIR, f"slot_{i}.lock")
@@ -68,15 +72,21 @@ class _DriveBandwidthLimiter:
                     self._slot = lock_file
                     return True
                 except FileExistsError:
-                    try:
-                        with open(lock_file, 'r') as f:
-                            pid = int(f.read().strip())
-                        if not _is_pid_alive(pid):
-                            os.remove(lock_file)
-                    except Exception:
-                        try: os.remove(lock_file)
-                        except Exception: pass
                     continue
+            # Mỗi 5 vòng chờ, dọn lock chết 1 lần (không spam tasklist)
+            attempts += 1
+            if attempts % 5 == 0:
+                for i in range(_MAX_CONCURRENT):
+                    lock_file = os.path.join(_LOCK_DIR, f"slot_{i}.lock")
+                    if os.path.exists(lock_file):
+                        try:
+                            with open(lock_file, 'r') as f:
+                                pid = int(f.read().strip())
+                            if not _is_pid_alive(pid):
+                                os.remove(lock_file)
+                        except Exception:
+                            try: os.remove(lock_file)
+                            except Exception: pass
             time.sleep(random.uniform(0.5, 1.5))
         # Timeout → cho chạy luôn
         return False
