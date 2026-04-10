@@ -155,8 +155,11 @@ def _refine_edges(img_bgra, img_rgb_guide, dominant_bgr):
     print("   🎯 Guided Filter refine alpha...")
     guide = cv2.cvtColor(img_rgb_guide, cv2.COLOR_BGR2GRAY) if len(img_rgb_guide.shape) == 3 else img_rgb_guide
     a_float = a_c.astype(np.float32) / 255.0
-    # radius=4, eps=0.01 — theo viền sắc nét
-    a_refined = cv2.ximgproc.guidedFilter(guide, a_float, radius=4, eps=0.01)
+    try:
+        a_refined = cv2.ximgproc.guidedFilter(guide, a_float, radius=4, eps=0.01)
+    except AttributeError:
+        # Fallback nếu không có ximgproc: dùng bilateral filter thay thế
+        a_refined = cv2.bilateralFilter(a_float, d=5, sigmaColor=0.1, sigmaSpace=5)
     a_c = np.clip(a_refined * 255, 0, 255).astype(np.uint8)
 
     # === 3. Color Decontamination — thay RGB viền bằng màu design gần nhất ===
