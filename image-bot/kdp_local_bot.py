@@ -332,6 +332,12 @@ def process_single_image(input_path, output_path):
         print("✂️ [2/3] Đang bóc nền...")
         img_upscaled = cv2.imdecode(np.fromfile(esrgan_out, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
         img_sharpened = img_upscaled
+
+        # Lưu bản upscaled (chưa cắt) đè lên file gốc để upload thay thế
+        upscaled_rgba = cv2.cvtColor(img_sharpened, cv2.COLOR_BGR2RGB) if img_sharpened.shape[2] == 3 else cv2.cvtColor(img_sharpened, cv2.COLOR_BGRA2RGBA)
+        Image.fromarray(upscaled_rgba).save(input_path, "PNG", dpi=(300, 300))
+        print(f"   📈 Đã lưu bản upscaled đè lên: {os.path.basename(input_path)}")
+
         cv2.imwrite(sharpened_path, img_sharpened)
 
         dominant_bgr, bg_ratio = _detect_bg_color(img_sharpened)
