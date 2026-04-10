@@ -20,13 +20,14 @@ async def main():
     parser.add_argument("--acc", type=str, default="default", help="Tên tài khoản (Ví dụ: acc1, acc2)")
     parser.add_argument("--headless", action="store_true", help="Chạy ẩn (không mở giao diện Chrome)")
     parser.add_argument("--no-cut", action="store_true", help="Chỉ upscale, không cắt nền")
+    parser.add_argument("--upscale-only", action="store_true", help="Chỉ download → upscale → upload (không dùng trình duyệt)")
     args = parser.parse_args()
 
     global _skip_bg_removal
-    _skip_bg_removal = args.no_cut
-    mode = "CHỈ UPSCALE" if args.no_cut else "UPSCALE + CẮT NỀN"
+    _skip_bg_removal = args.no_cut or args.upscale_only
+    mode = "UPSCALE-ONLY (không trình duyệt)" if args.upscale_only else ("CHỈ UPSCALE" if args.no_cut else "UPSCALE + CẮT NỀN")
     print(f"🌟=== KHỞI ĐỘNG CÔNG NHÂN BOT (Account: {args.acc}, Mode: {mode}) ===🌟")
-    
+
     # 1. Kết nối Google API
     try:
         gmanager = GoogleManager()
@@ -34,10 +35,12 @@ async def main():
         print(f"❌ Lỗi khởi tạo API: {e}")
         return
 
-    # 2. Mở trình duyệt
-    bot = ImageBotCore(acc_name=args.acc, headless=args.headless)
-    await bot.init_browser()
-    await bot.check_login_and_navigate()
+    # 2. Mở trình duyệt (bỏ qua nếu upscale-only)
+    bot = None
+    if not args.upscale_only:
+        bot = ImageBotCore(acc_name=args.acc, headless=args.headless)
+        await bot.init_browser()
+        await bot.check_login_and_navigate()
 
     input_dir = f"inputs_temp_{args.acc}" if args.acc != "default" else "inputs_temp"
     os.makedirs(input_dir, exist_ok=True)
@@ -65,9 +68,9 @@ async def main():
         print(f"⚙️ NHẬN LỆNH DÒNG {row_num} (ID ẢNH: {id_goc[:8]}...)")
 
         # Xoá phiên cũ
-        if job_idx > 0:
+        if bot and job_idx > 0:
             await bot.clear_previous_job()
-        
+
         job_idx += 1
 
         # Chuẩn bị dọn rác
@@ -82,22 +85,22 @@ async def main():
             continue
 
         try:
-            # ---> BƯỚC NÀY ĐANG ĐƯỢC ĐẶT Ở CHẾ ĐỘ RÀ SOÁT BẢO TRÌ (DEBUG MODE)
-            # Bởi vì các thao tác ấn click chuột của Playwright lên thẳng Web của Google
-            # Cần căn chỉnh trực tiếp vị trí nên script bot.process_image_job đang được Comment lại ở file bot.py
+            if args.upscale_only:
+                # UPSCALE-ONLY: download → upscale → upload (không dùng trình duyệt)
+                output_files_paths = [input_path]
+            else:
+                # GỌI LOGIC TẠO ẢNH BẰNG TRÌNH DUYỆT GHÉP NỐI VỚI GOOGLE LABS
+                print(f"🚀 Bắt chuyển giao lệnh cho Bot ({tong_so_luong} ảnh, độ nét y/c: {download_reso})...")
+                output_files_paths = await bot.process_image_job(row_num, input_path, prompt, job['aspect_ratio'], so_luong, tong_so_luong, download_reso)
 
-            # GỌI LOGIC TẠO ẢNH BẰNG TRÌNH DUYỆT GHÉP NỐI VỚI GOOGLE LABS
-            print(f"🚀 Bắt chuyển giao lệnh cho Bot ({tong_so_luong} ảnh, độ nét y/c: {download_reso})...")
-            output_files_paths = await bot.process_image_job(row_num, input_path, prompt, job['aspect_ratio'], so_luong, tong_so_luong, download_reso)
-            
-            if not output_files_paths:
-                retry_count = job.get('retry_count', 0)
-                if retry_count < 2:
-                    gmanager.update_job_status(row_num, f"Lỗi Web ❌ Chờ xử lý (thử lại {retry_count + 1})")
-                    print(f"⚠️ Cảnh báo: Bot văng lỗi. Đã thả lại dòng này vào Lưới chờ để các Bot khác (hoặc chính nó) thử lại ở vòng sau.")
-                else:
-                    gmanager.update_job_status(row_num, "Lỗi Web Vĩnh Viễn ❌", result_link="Không có ảnh nào tải xuống")
-                continue
+                if not output_files_paths:
+                    retry_count = job.get('retry_count', 0)
+                    if retry_count < 2:
+                        gmanager.update_job_status(row_num, f"Lỗi Web ❌ Chờ xử lý (thử lại {retry_count + 1})")
+                        print(f"⚠️ Cảnh báo: Bot văng lỗi. Đã thả lại dòng này vào Lưới chờ để các Bot khác (hoặc chính nó) thử lại ở vòng sau.")
+                    else:
+                        gmanager.update_job_status(row_num, "Lỗi Web Vĩnh Viễn ❌", result_link="Không có ảnh nào tải xuống")
+                    continue
 
             # KHỞI TẠO ĐỊNH TUYẾN: CHUẨN BỊ LƯU TRỮ VÀO GOOGLE DRIVE
             base_output_folder_id = "1yKY-v8gU8O0hbnS4XJc5GU1L2U3oMpKR"
@@ -176,7 +179,8 @@ async def main():
             else:
                 gmanager.update_job_status(row_num, "Lỗi Kịch Bản Vĩnh Viễn ❌")
 
-    await bot.close()
+    if bot:
+        await bot.close()
     print("\n✅ === HOÀN TẤT NHIỆM VỤ, NGHỈ NGƠI === ✅")
 
 if __name__ == "__main__":
