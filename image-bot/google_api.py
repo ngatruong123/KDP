@@ -2,7 +2,6 @@ import os
 import io
 import time
 import random
-import socket
 import threading
 import gspread
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -12,9 +11,7 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
 from googleapiclient.errors import HttpError
 from dotenv import load_dotenv
-
-# Set socket timeout 60s — đủ cho file lớn vài MB, không treo quá lâu
-socket.setdefaulttimeout(60)
+from google.auth.transport.requests import AuthorizedSession
 
 # === CROSS-PROCESS BANDWIDTH LIMITER ===
 # Giới hạn tối đa 2 bot download/upload Drive cùng lúc (tránh nghẽn mạng)
