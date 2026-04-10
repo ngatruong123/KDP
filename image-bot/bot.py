@@ -143,8 +143,56 @@ class ImageBotCore:
             print(f"======================================")
                 
             try:
-                # -------- ẢNH GỐC ĐÃ TỰ ĐỘNG GÀI VÀO PROMPT (Google Flow update mới) --------
-                await asyncio.sleep(1)
+                # -------- CHECK CHIP ẢNH: nếu Flow tự gài → skip, chưa có → gài thủ công --------
+                await asyncio.sleep(1.5)
+                chip_selector = "img[src^='blob:']"
+                all_chips = await self.page.locator(chip_selector).all()
+                small_chips = []
+                for c in all_chips:
+                    try:
+                        bb = await c.bounding_box()
+                        if bb and bb['width'] < 150 and bb['height'] < 150:
+                            small_chips.append(c)
+                    except Exception:
+                        pass
+
+                if len(small_chips) > 0:
+                    print("✅ Ảnh gốc đã tự gài vào prompt (Flow mới).")
+                else:
+                    print("👁️ Chưa thấy chip ảnh — thử gài thủ công...")
+                    for attach_attempt in range(3):
+                        try:
+                            await self.uploaded_img_locator.hover()
+                            await asyncio.sleep(0.5)
+
+                            p_wrap = self.uploaded_img_locator.locator("xpath=./ancestor::div[2]")
+                            if await p_wrap.locator("button").count() == 0:
+                                p_wrap = self.uploaded_img_locator.locator("xpath=./ancestor::div[3]")
+                            if await p_wrap.locator("button").count() == 0:
+                                p_wrap = self.uploaded_img_locator.locator("xpath=./ancestor::div[4]")
+
+                            await p_wrap.locator("button").last.hover()
+                            await asyncio.sleep(1.5)
+                            await p_wrap.locator("button").last.click(force=True)
+
+                            add_btn_selector = "div[role='menuitem']:has-text('Thêm vào'), button:has-text('Thêm vào'), span:has-text('Thêm vào câu lệnh')"
+                            try:
+                                await self.page.wait_for_selector(add_btn_selector, state="visible", timeout=10000)
+                                await self.page.locator(add_btn_selector).last.click(force=True)
+                                await asyncio.sleep(1.5)
+                                print("✅ Đã gài ảnh gốc vào prompt thủ công!")
+                                break
+                            except Exception:
+                                await self.page.keyboard.press("Escape")
+                                if attach_attempt < 2:
+                                    print(f"   🔄 Menu chưa hiện (lần {attach_attempt+1}), thử lại...")
+                                    await asyncio.sleep(1)
+                        except Exception as e:
+                            if attach_attempt < 2:
+                                print(f"   🔄 Lỗi gài ảnh (lần {attach_attempt+1}): {e}, thử lại...")
+                                await asyncio.sleep(1)
+                    else:
+                        print("⚠️ Không gài được ảnh sau 3 lần — tiếp tục chạy prompt không ảnh")
 
                 # DÁN PROMPT VÀO CUỐI CÙNG
                 input_boxes = self.page.locator("textarea[placeholder*='Bạn muốn tạo gì']:visible, [contenteditable='true']:visible, textarea:not(.g-recaptcha-response):visible, input[type='text']:not([type='hidden']):visible")
