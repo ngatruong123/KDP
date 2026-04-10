@@ -275,7 +275,7 @@ def process_file(ten_file):
     except Exception as e:
         print(f"❌ Kẹt Trục tại {ten_file} - Lỗi: {e}")
 
-def process_single_image(input_path, output_path):
+def process_single_image(input_path, output_path, skip_bg_removal=False):
     """
     Hàm xử lý 1 ảnh: rembg → cạo viền + detect nền → upscale x4 → resize x0.5 + sharpen LAB → save 300dpi.
     Dùng để main.py gọi trực tiếp.
@@ -325,6 +325,12 @@ def process_single_image(input_path, output_path):
         upscaled_rgba = cv2.cvtColor(img_sharpened, cv2.COLOR_BGR2RGB) if img_sharpened.shape[2] == 3 else cv2.cvtColor(img_sharpened, cv2.COLOR_BGRA2RGBA)
         Image.fromarray(upscaled_rgba).save(input_path, "PNG", dpi=(300, 300))
         print(f"   📈 Đã lưu bản upscaled đè lên: {os.path.basename(input_path)}")
+
+        if skip_bg_removal:
+            # Chỉ upscale, không cắt nền — lưu upscaled làm output
+            Image.fromarray(upscaled_rgba).save(output_path, "PNG", dpi=(300, 300))
+            print(f"🥇 HOÀN TẤT (chỉ upscale): {ten_file} → {os.path.basename(output_path)}")
+            return output_path
 
         cv2.imwrite(sharpened_path, img_sharpened)
 

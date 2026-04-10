@@ -4,22 +4,28 @@ import argparse
 from google_api import GoogleManager
 from bot import ImageBotCore
 from kdp_local_bot import process_single_image
+
+_skip_bg_removal = False
 from concurrent.futures import ThreadPoolExecutor
 
 def _process_one(args):
     """Xử lý 1 ảnh (dùng cho ThreadPoolExecutor)"""
     file_path, processed_path = args
     print(f"🔪 Đang xử lý: {os.path.basename(file_path)}...")
-    result = process_single_image(file_path, processed_path)
+    result = process_single_image(file_path, processed_path, skip_bg_removal=_skip_bg_removal)
     return result  # None nếu thất bại
 
 async def main():
     parser = argparse.ArgumentParser(description="Image Bot Queue Worker")
     parser.add_argument("--acc", type=str, default="default", help="Tên tài khoản (Ví dụ: acc1, acc2)")
     parser.add_argument("--headless", action="store_true", help="Chạy ẩn (không mở giao diện Chrome)")
+    parser.add_argument("--no-cut", action="store_true", help="Chỉ upscale, không cắt nền")
     args = parser.parse_args()
 
-    print(f"🌟=== KHỞI ĐỘNG CÔNG NHÂN BOT (Account: {args.acc}) ===🌟")
+    global _skip_bg_removal
+    _skip_bg_removal = args.no_cut
+    mode = "CHỈ UPSCALE" if args.no_cut else "UPSCALE + CẮT NỀN"
+    print(f"🌟=== KHỞI ĐỘNG CÔNG NHÂN BOT (Account: {args.acc}, Mode: {mode}) ===🌟")
     
     # 1. Kết nối Google API
     try:
