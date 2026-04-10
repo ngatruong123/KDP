@@ -109,14 +109,6 @@ async def main():
             
             link_share = f"https://drive.google.com/drive/folders/{job_specific_folder_id}"
 
-            # Tìm hoặc tạo subfolder _Processed (chỉ 1 folder duy nhất)
-            query = f"'{job_specific_folder_id}' in parents and name='_Processed' and mimeType='application/vnd.google-apps.folder' and trashed=false"
-            existing = gmanager.drive_service.files().list(q=query, fields="files(id)").execute().get('files', [])
-            if existing:
-                processed_folder_id = existing[0]['id']
-            else:
-                processed_folder_id, _ = gmanager.create_drive_folder("_Processed", job_specific_folder_id)
-
             # Xử lý song song: upscale + tách nền (2 thread)
             # process_single_image sẽ đè bản upscaled lên file gốc
             process_args = [(fp, fp.rsplit('.', 1)[0] + '_VIP.png') for fp in output_files_paths]
@@ -136,13 +128,23 @@ async def main():
                 if os.path.exists(file_path):
                     gmanager.upload_file_to_drive(file_path, os.path.basename(file_path), job_specific_folder_id)
 
-            # Upload ảnh đã cắt nền vào _Processed
-            for final_upload_path in processed_paths:
-                print(f"✅ Đang xách ảnh {os.path.basename(final_upload_path)} đưa lên Mây...")
-                gmanager.upload_file_to_drive(final_upload_path, os.path.basename(final_upload_path), processed_folder_id)
+            if _skip_bg_removal:
+                # --no-cut: chỉ upload upscaled, không cần _Processed
+                link_share = f"https://drive.google.com/drive/folders/{job_specific_folder_id}"
+            else:
+                # Tìm hoặc tạo subfolder _Processed
+                query = f"'{job_specific_folder_id}' in parents and name='_Processed' and mimeType='application/vnd.google-apps.folder' and trashed=false"
+                existing = gmanager.drive_service.files().list(q=query, fields="files(id)").execute().get('files', [])
+                if existing:
+                    processed_folder_id = existing[0]['id']
+                else:
+                    processed_folder_id, _ = gmanager.create_drive_folder("_Processed", job_specific_folder_id)
 
-            # Link sheet trỏ vào _Processed
-            link_share = f"https://drive.google.com/drive/folders/{processed_folder_id}"
+                # Upload ảnh đã cắt nền vào _Processed
+                for final_upload_path in processed_paths:
+                    print(f"✅ Đang xách ảnh {os.path.basename(final_upload_path)} đưa lên Mây...")
+                    gmanager.upload_file_to_drive(final_upload_path, os.path.basename(final_upload_path), processed_folder_id)
+                link_share = f"https://drive.google.com/drive/folders/{processed_folder_id}"
 
             # Cập nhật kết quả
             if len(processed_paths) > 0:
