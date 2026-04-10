@@ -13,8 +13,8 @@ from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
 from googleapiclient.errors import HttpError
 from dotenv import load_dotenv
 
-# Set socket timeout 30s để không bị treo 2 phút khi mạng nghẽn
-socket.setdefaulttimeout(30)
+# Set socket timeout 60s — đủ cho file lớn vài MB, không treo quá lâu
+socket.setdefaulttimeout(60)
 
 # === CROSS-PROCESS BANDWIDTH LIMITER ===
 # Giới hạn tối đa 2 bot download/upload Drive cùng lúc (tránh nghẽn mạng)
@@ -137,6 +137,16 @@ class GoogleManager:
         # Google Drive Client
         print("Đang kết nối vào Google Drive...")
         self.drive_service = build('drive', 'v3', credentials=self.creds)
+
+    def _ensure_creds(self):
+        """Tự động refresh token nếu hết hạn — tránh lỗi khi bot chạy lâu"""
+        if self.creds and self.creds.expired and self.creds.refresh_token:
+            try:
+                self.creds.refresh(Request())
+                self.drive_service = build('drive', 'v3', credentials=self.creds)
+                print("🔑 Token đã được tự động refresh.")
+            except Exception as e:
+                print(f"⚠️ Không refresh được token: {e}")
 
     def get_pending_jobs(self):
         """Đọc danh sách các dòng từ Google Sheets có trạng thái chưa hoàn thành (Dành cho kiểm tra thủ công)"""
@@ -309,6 +319,7 @@ class GoogleManager:
 
     def download_file_from_drive(self, file_id, save_path):
         """Tải file ảnh gốc từ Google Drive xuống vùng nhớ tạm của máy tính"""
+        self._ensure_creds()
         limiter = _DriveBandwidthLimiter()
         try:
             file_id = self.extract_drive_id(file_id)
@@ -399,6 +410,7 @@ class GoogleManager:
 
     def upload_file_to_drive(self, local_path, file_name, parent_folder_id):
         """Tải một file ảnh từ thư mục tạm /outputs_temp lên thư mục kết quả của GDrive"""
+        self._ensure_creds()
         limiter = _DriveBandwidthLimiter()
         try:
             file_metadata = {
