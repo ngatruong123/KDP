@@ -138,6 +138,11 @@ class GoogleManager:
         print("Đang kết nối vào Google Drive...")
         self.drive_service = build('drive', 'v3', credentials=self.creds)
 
+        # Cache header để không gọi API mỗi lần update
+        self._headers = self.worksheet.row_values(1)
+        self._status_col = self._headers.index("status") + 1 if "status" in self._headers else 5
+        self._result_col = self._headers.index("result") + 1 if "result" in self._headers else 6
+
     def _ensure_creds(self):
         """Tự động refresh token nếu hết hạn — tránh lỗi khi bot chạy lâu"""
         if self.creds and self.creds.expired and self.creds.refresh_token:
@@ -275,22 +280,27 @@ class GoogleManager:
             return None
 
     def reset_failed_jobs(self):
-        """Quét toàn bộ sheet, dòng nào có status chứa 'lỗi' hoặc '❌' thì reset về 'Chờ xử lý' để bot chạy lại"""
+        """Quét toàn bộ sheet, dòng nào có status chứa 'lỗi' hoặc '❌' thì reset về 'Chờ xử lý' (batch 1 lần)"""
         records = self.worksheet.get_all_records()
         headers = self.worksheet.row_values(1)
         status_col_idx = headers.index("status") + 1 if "status" in headers else 5
-        count = 0
+
+        # Thu thập tất cả dòng cần reset
+        cells_to_update = []
         for index, row in enumerate(records):
             clean_row = {str(k).strip().lower(): v for k, v in row.items()}
             status = str(clean_row.get("status", "")).strip()
             status_lower = status.lower()
             if "lỗi" in status_lower or "❌" in status or "error" in status_lower:
                 row_num = index + 2
-                self.worksheet.update_cell(row_num, status_col_idx, "Chờ xử lý")
+                cells_to_update.append(gspread.Cell(row_num, status_col_idx, "Chờ xử lý"))
                 print(f"   🔄 Dòng {row_num}: [{status}] → [Chờ xử lý]")
-                count += 1
-        print(f"✅ Đã reset {count} dòng lỗi về 'Chờ xử lý'.")
-        return count
+
+        # Batch update 1 lần duy nhất thay vì N lần API call
+        if cells_to_update:
+            self.worksheet.update_cells(cells_to_update, value_input_option='USER_ENTERED')
+        print(f"✅ Đã reset {len(cells_to_update)} dòng lỗi về 'Chờ xử lý'.")
+        return len(cells_to_update)
 
     def _log_error(self, context, error):
         """Ghi lỗi vào error_log.txt"""
@@ -301,16 +311,12 @@ class GoogleManager:
             pass
 
     def update_job_status(self, row_num, status, result_link=""):
-        """Cập nhật trạng thái và link kết quả lên Google Sheets. Tự động rà tìm cột theo Header"""
+        """Cập nhật trạng thái và link kết quả lên Google Sheets."""
         try:
-            headers = self.worksheet.row_values(1)
-            status_col_idx = headers.index("status") + 1 if "status" in headers else 5
-            result_col_idx = headers.index("result") + 1 if "result" in headers else 6
-
             def _do_update():
-                self.worksheet.update_cell(row_num, status_col_idx, status)
+                self.worksheet.update_cell(row_num, self._status_col, status)
                 if result_link:
-                    self.worksheet.update_cell(row_num, result_col_idx, result_link)
+                    self.worksheet.update_cell(row_num, self._result_col, result_link)
 
             _retry_api(_do_update, max_retries=3, label=f"UpdateSheet row {row_num}")
         except Exception as e:
