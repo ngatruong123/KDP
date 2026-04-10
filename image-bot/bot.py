@@ -249,7 +249,7 @@ class ImageBotCore:
                 if await config_btn.count() > 0:
                     toolbar_parent = config_btn.locator("xpath=./..")
                     send_btn = toolbar_parent.locator("button").last
-                    await send_btn.click(force=True, timeout=2000)
+                    await send_btn.click(force=True, timeout=10000)
                     sent_success = True
                     await asyncio.sleep(1)
             except Exception:
@@ -388,7 +388,7 @@ class ImageBotCore:
                     if menu_btn:
                         try:
                             # Chống treo Playwright 30s với Locator
-                            await menu_btn.click(force=True, timeout=3000)
+                            await menu_btn.click(force=True, timeout=10000)
                         except Exception:
                             await menu_btn.evaluate("el => el.click()")
                         await asyncio.sleep(1.2)
@@ -412,7 +412,7 @@ class ImageBotCore:
                             if await reso_btn.count() > 0:
                                 async with self.page.expect_download(timeout=120000) as download_info:
                                     try:
-                                        await reso_btn.click(force=True, timeout=5000)
+                                        await reso_btn.click(force=True, timeout=10000)
                                     except Exception:
                                         # Ép nhấp bằng JS nếu React chặn
                                         await reso_btn.evaluate("el => el.click()")
@@ -420,7 +420,7 @@ class ImageBotCore:
                             else:
                                 async with self.page.expect_download(timeout=120000) as download_info:
                                     try:
-                                        await dl_btn.click(force=True, timeout=5000)
+                                        await dl_btn.click(force=True, timeout=10000)
                                     except Exception:
                                         await dl_btn.evaluate("el => el.click()")
 
