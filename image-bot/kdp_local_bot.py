@@ -151,18 +151,7 @@ def _refine_edges(img_bgra, img_rgb_guide, dominant_bgr):
     a_c[pass2_mask] = 0
     print(f"   🔄 Pass 2: {np.count_nonzero(pass2_mask)} pixel thêm bị cắt")
 
-    # === 2. Guided Filter — alpha bám theo viền thật ===
-    print("   🎯 Guided Filter refine alpha...")
-    guide = cv2.cvtColor(img_rgb_guide, cv2.COLOR_BGR2GRAY) if len(img_rgb_guide.shape) == 3 else img_rgb_guide
-    a_float = a_c.astype(np.float32) / 255.0
-    try:
-        a_refined = cv2.ximgproc.guidedFilter(guide, a_float, radius=4, eps=0.01)
-    except AttributeError:
-        # Fallback nếu không có ximgproc: dùng bilateral filter thay thế
-        a_refined = cv2.bilateralFilter(a_float, d=5, sigmaColor=0.1, sigmaSpace=5)
-    a_c = np.clip(a_refined * 255, 0, 255).astype(np.uint8)
-
-    # === 3. Color Decontamination — thay RGB viền bằng màu design gần nhất ===
+    # === 2. Color Decontamination — thay RGB viền bằng màu design gần nhất ===
     print("   🎨 Color Decontamination viền...")
     alpha_binary = (a_c > 0).astype(np.uint8) * 255
     kernel_decon = np.ones((5, 5), np.uint8)
@@ -181,10 +170,6 @@ def _refine_edges(img_bgra, img_rgb_guide, dominant_bgr):
         b_c[edge_pixels] = img_inpainted[:, :, 0][edge_pixels]
         g_c[edge_pixels] = img_inpainted[:, :, 1][edge_pixels]
         r_c[edge_pixels] = img_inpainted[:, :, 2][edge_pixels]
-
-    # === 4. Bilateral Filter — làm mượt alpha giữ cạnh sắc ===
-    print("   ✨ Bilateral Filter alpha...")
-    a_c = cv2.bilateralFilter(a_c, d=5, sigmaColor=50, sigmaSpace=50)
 
     print("   ✅ Edge refinement hoàn tất")
     return cv2.merge([b_c, g_c, r_c, a_c])
