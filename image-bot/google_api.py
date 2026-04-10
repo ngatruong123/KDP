@@ -2,6 +2,7 @@ import os
 import io
 import time
 import random
+import socket
 import gspread
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
@@ -10,6 +11,9 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
 from googleapiclient.errors import HttpError
 from dotenv import load_dotenv
+
+# Set socket timeout 30s để không bị treo 2 phút khi mạng nghẽn
+socket.setdefaulttimeout(30)
 
 load_dotenv()
 
@@ -256,13 +260,18 @@ class GoogleManager:
                 done = False
                 while done is False:
                     status, done = downloader.next_chunk()
+                fh.close()
 
-            _retry_api(_do_download, max_retries=4, label=f"Download {file_id[:8]}")
+            _retry_api(_do_download, max_retries=5, label=f"Download {file_id[:8]}")
             print(f"✅ Đã tải thành công ảnh gốc xuống máy (ID: {file_id[:8]}...)")
             return True
         except Exception as e:
             print(f"❌ Lỗi Tải File từ G-Drive (ID: {file_id}): {e}")
             self._log_error(f"Download {file_id}", e)
+            # Xoá file rỗng/hỏng nếu download dở dang
+            if os.path.exists(save_path):
+                try: os.remove(save_path)
+                except Exception: pass
             return False
 
     def create_drive_folder(self, folder_name, parent_id=None):
