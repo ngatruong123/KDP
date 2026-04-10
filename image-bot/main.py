@@ -152,13 +152,21 @@ async def main():
             if failed_count > 0:
                 print(f"⚠️ {failed_count}/{len(raw_results)} ảnh xử lý THẤT BẠI — bỏ qua, KHÔNG upload ảnh lỗi")
 
+            # Cập nhật path upscaled: process_single_image đổi sang .jpg
+            upscaled_paths = []
+            for fp in output_files_paths:
+                jpg_path = fp.rsplit('.', 1)[0] + '.jpg'
+                if os.path.exists(jpg_path):
+                    upscaled_paths.append(jpg_path)
+                elif os.path.exists(fp):
+                    upscaled_paths.append(fp)
+
             # Upload ảnh upscaled vào subfolder _1.1, _1.2, ... (mỗi ảnh 1 folder)
-            print(f"📦 Đang upload {len(output_files_paths)} ảnh upscaled vào các subfolder...")
+            print(f"📦 Đang upload {len(upscaled_paths)} ảnh upscaled vào các subfolder...")
             sub_folder_ids = gmanager.get_or_create_numbered_subfolders(job_specific_folder_id, len(output_files_paths))
-            for idx, file_path in enumerate(output_files_paths):
-                if os.path.exists(file_path):
-                    folder_id = sub_folder_ids[idx] if idx < len(sub_folder_ids) else job_specific_folder_id
-                    gmanager.upload_file_to_drive(file_path, os.path.basename(file_path), folder_id)
+            for idx, file_path in enumerate(upscaled_paths):
+                folder_id = sub_folder_ids[idx] if idx < len(sub_folder_ids) else job_specific_folder_id
+                gmanager.upload_file_to_drive(file_path, os.path.basename(file_path), folder_id)
 
             if _skip_bg_removal:
                 link_share = f"https://drive.google.com/drive/folders/{job_specific_folder_id}"
@@ -181,7 +189,7 @@ async def main():
                 print(f"❌ TOÀN BỘ ảnh xử lý thất bại cho dòng {row_num}")
 
             # Cleanup temp files
-            all_temps = output_files_paths + processed_paths
+            all_temps = output_files_paths + upscaled_paths + processed_paths
             for f in all_temps:
                 if f and os.path.exists(f):
                     os.remove(f)
