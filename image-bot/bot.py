@@ -101,18 +101,26 @@ class ImageBotCore:
             print("👁️ [AI]: Đã rỉa được lỗ hở Upload! Tải ảnh lên thành công.")
             
             # CHỜ ĐỢI ẢNH TẢI LÊN ĐẠT 100% (KHẮC PHỤC LỖI CLICK SỚM)
-            await asyncio.sleep(2) # Cho web hiện chữ % lên
+            # Chờ lâu hơn để web kịp hiện % (CPU lag khi multi-bot)
+            await asyncio.sleep(4)
             progress_bar = self.page.locator("text=/^\\d+%$/")
             wait_up = 0
-            while await progress_bar.count() > 0 and wait_up < 30:
-                print("⏳ Chờ ảnh gốc upload tải đến 100%...")
-                await asyncio.sleep(2)
-                wait_up += 1
-                
+            while wait_up < 45:
+                if await progress_bar.count() > 0:
+                    print("⏳ Chờ ảnh gốc upload tải đến 100%...")
+                    await asyncio.sleep(2)
+                    wait_up += 1
+                else:
+                    # Chờ thêm 2s nữa để chắc chắn % không xuất hiện muộn
+                    await asyncio.sleep(2)
+                    if await progress_bar.count() == 0:
+                        break
+                    wait_up += 1
+
             print("👁️ [AI]: Đang dùng X-Ray lọc màng Render. Chờ ảnh mới trồi lên Canvas...")
             wait_render = 0
             uploaded_src = None
-            while wait_render < 20: # Quét liên tục trong 40 giây (20 vòng x 2s)
+            while wait_render < 30: # Quét liên tục trong 60 giây (30 vòng x 2s)
                 new_img_count_after_up = await self.page.locator("img").count()
                 for k in range(new_img_count_after_up):
                     src = await self.page.locator("img").nth(k).get_attribute("src")
