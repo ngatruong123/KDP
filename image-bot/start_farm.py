@@ -9,7 +9,6 @@ def main():
     parser.add_argument("--accounts", type=str, required=True, help="Danh sách tên các tài khoản cách nhau bằng dấu phẩy (vd: minnie,avocado,tom)")
     parser.add_argument("--headless", action="store_true", help="Chạy ẩn (không mở Window Chrome tĩnh)")
     parser.add_argument("--no-cut", action="store_true", help="Chỉ upscale, không cắt nền")
-    parser.add_argument("--upscale-only", action="store_true", help="Chỉ download → upscale → upload (không dùng trình duyệt)")
     args = parser.parse_args()
 
     accounts = [acc.strip() for acc in args.accounts.split(",") if acc.strip()]
@@ -51,8 +50,6 @@ def main():
             cmd.append("--headless")
         if args.no_cut:
             cmd.append("--no-cut")
-        if args.upscale_only:
-            cmd.append("--upscale-only")
             
         print(f"👉 Khởi động Luồng [ {acc} ] -> Xem nhật ký tại: logs/{acc}.log")
         
