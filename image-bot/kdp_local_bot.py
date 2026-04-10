@@ -127,6 +127,66 @@ def _chroma_key(img_bgra, dominant_bgr):
     return cv2.merge([b_c, g_c, r_c, a_c])
 
 
+def _refine_edges(img_bgra, img_rgb_guide, dominant_bgr):
+    """
+    Post-processing nâng cao sau chroma-key:
+    1) Multi-pass ΔE — lần 2 blur mạnh hơn, clean chấm sót
+    2) Guided Filter — alpha bám theo viền thật của ảnh
+    3) Color Decontamination — thay RGB viền bằng màu design gần nhất
+    4) Bilateral Filter — làm mượt viền giữ cạnh sắc
+    """
+    b_c, g_c, r_c, a_c = cv2.split(img_bgra)
+
+    # === 1. Multi-pass ΔE — lần 2 với blur mạnh hơn, catch chấm sót ===
+    print("   🔄 Multi-pass ΔE (lần 2, blur 5x5)...")
+    img_blurred2 = cv2.GaussianBlur(img_bgra[:, :, :3], (5, 5), 0)
+    img_lab2 = cv2.cvtColor(img_blurred2, cv2.COLOR_BGR2LAB).astype(np.float32)
+    bg_lab = cv2.cvtColor(dominant_bgr.reshape(1, 1, 3), cv2.COLOR_BGR2LAB).astype(np.float32)[0][0]
+    diff2 = img_lab2 - bg_lab
+    delta_e2 = np.sqrt(np.sum(diff2 ** 2, axis=2))
+
+    is_dark_bg = int(dominant_bgr.mean()) < 60
+    pass2_threshold = 22 if is_dark_bg else 42
+    pass2_mask = (delta_e2 < pass2_threshold) & (a_c > 0)
+    a_c[pass2_mask] = 0
+    print(f"   🔄 Pass 2: {np.count_nonzero(pass2_mask)} pixel thêm bị cắt")
+
+    # === 2. Guided Filter — alpha bám theo viền thật ===
+    print("   🎯 Guided Filter refine alpha...")
+    guide = cv2.cvtColor(img_rgb_guide, cv2.COLOR_BGR2GRAY) if len(img_rgb_guide.shape) == 3 else img_rgb_guide
+    a_float = a_c.astype(np.float32) / 255.0
+    # radius=4, eps=0.01 — theo viền sắc nét
+    a_refined = cv2.ximgproc.guidedFilter(guide, a_float, radius=4, eps=0.01)
+    a_c = np.clip(a_refined * 255, 0, 255).astype(np.uint8)
+
+    # === 3. Color Decontamination — thay RGB viền bằng màu design gần nhất ===
+    print("   🎨 Color Decontamination viền...")
+    alpha_binary = (a_c > 0).astype(np.uint8) * 255
+    kernel_decon = np.ones((5, 5), np.uint8)
+    eroded_inner = cv2.erode(alpha_binary, kernel_decon, iterations=1)
+    # Vùng viền = pixel sống nhưng không ở deep inside
+    edge_pixels = (a_c > 0) & (a_c < 255) | ((a_c > 0) & (eroded_inner == 0))
+
+    if np.any(edge_pixels):
+        # Tạo ảnh chỉ chứa pixel interior (deep inside, alpha=255)
+        interior_mask = (eroded_inner == 255).astype(np.uint8)
+        # Inpaint vùng viền từ interior colors
+        inpaint_mask = (edge_pixels.astype(np.uint8)) * 255
+        img_rgb_clean = cv2.merge([b_c, g_c, r_c])
+        img_inpainted = cv2.inpaint(img_rgb_clean, inpaint_mask, 3, cv2.INPAINT_TELEA)
+        # Chỉ thay RGB ở vùng viền
+        b_c[edge_pixels] = img_inpainted[:, :, 0][edge_pixels]
+        g_c[edge_pixels] = img_inpainted[:, :, 1][edge_pixels]
+        r_c[edge_pixels] = img_inpainted[:, :, 2][edge_pixels]
+
+    # === 4. Bilateral Filter — làm mượt alpha giữ cạnh sắc ===
+    print("   ✨ Bilateral Filter alpha...")
+    a_c = cv2.bilateralFilter(a_c, d=5, sigmaColor=50, sigmaSpace=50)
+
+    print("   ✅ Edge refinement hoàn tất")
+    return cv2.merge([b_c, g_c, r_c, a_c])
+
+
 def _remove_bg(img_sharpened, sharpened_path, dominant_bgr, bg_ratio):
     """
     Tách nền: nếu nền đơn sắc rõ (>70% viền) → chỉ dùng chroma-key (skip rembg).
@@ -207,12 +267,9 @@ def process_file(ten_file):
 
         img_result = _remove_bg(img_sharpened, tam_path, dominant_bgr, bg_ratio)
 
-        # MINIMUM (erode toàn bộ alpha 1px - co viền vào, xóa răng cưa)
-        print("🪄 Đang áp Minimum toàn bộ ảnh...")
-        b_f, g_f, r_f, a_f = cv2.split(img_result)
-        kernel_min = np.ones((2, 2), np.uint8)
-        a_f = cv2.erode(a_f, kernel_min, iterations=1)
-        img_result = cv2.merge([b_f, g_f, r_f, a_f])
+        # Edge refinement nâng cao
+        print("🪄 [3/3] Đang refine viền...")
+        img_result = _refine_edges(img_result, img_sharpened, dominant_bgr)
 
         # Save 300dpi
         img_rgba = cv2.cvtColor(img_result, cv2.COLOR_BGRA2RGBA)
@@ -282,12 +339,9 @@ def process_single_image(input_path, output_path):
 
         img_result = _remove_bg(img_sharpened, sharpened_path, dominant_bgr, bg_ratio)
 
-        # MINIMUM (erode toàn bộ alpha ~0.5px - co viền vào, xóa răng cưa)
-        print("🪄 Đang áp Minimum toàn bộ ảnh...")
-        b_f, g_f, r_f, a_f = cv2.split(img_result)
-        kernel_min = np.ones((2, 2), np.uint8)
-        a_f = cv2.erode(a_f, kernel_min, iterations=1)
-        img_result = cv2.merge([b_f, g_f, r_f, a_f])
+        # Edge refinement nâng cao
+        print("🪄 [3/3] Đang refine viền...")
+        img_result = _refine_edges(img_result, img_sharpened, dominant_bgr)
 
         # Save 300dpi
         img_rgba = cv2.cvtColor(img_result, cv2.COLOR_BGRA2RGBA)
