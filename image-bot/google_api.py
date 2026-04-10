@@ -200,9 +200,25 @@ class GoogleManager:
                     jobs.append({"row_num": row_num})
         return jobs
 
-    def checkout_next_job(self, acc_name):
+    def checkout_next_job(self, acc_name, reset_errors=False):
         """(Queue Worker Mode) Tìm một việc chưa ai làm, ĐÁNH DẤU CHỦ QUYỀN ngay lập tức và trả về job đó."""
         records = self.worksheet.get_all_records()
+
+        # Reset lỗi trong cùng 1 lần tải sheet (không cần gọi get_all_records thêm lần nữa)
+        if reset_errors:
+            error_cells = []
+            for index, row in enumerate(records):
+                clean_row = {str(k).strip().lower(): v for k, v in row.items()}
+                status = str(clean_row.get("status", "")).strip()
+                status_lower = status.lower()
+                if "lỗi" in status_lower or "❌" in status or "error" in status_lower:
+                    error_cells.append(gspread.Cell(index + 2, self._status_col, "Chờ xử lý"))
+            if error_cells:
+                self.worksheet.update_cells(error_cells, value_input_option='USER_ENTERED')
+                print(f"🔄 Đã reset {len(error_cells)} dòng lỗi về 'Chờ xử lý'.")
+                # Reload records vì status đã thay đổi
+                records = self.worksheet.get_all_records()
+
         for index, row in enumerate(records):
             clean_row = {str(k).strip().lower(): v for k, v in row.items()}
             status = str(clean_row.get("status", "")).lower().strip()
@@ -286,7 +302,7 @@ class GoogleManager:
                 self.update_job_status(row_num, "Folder rỗng ⚠️")
                 return None
 
-            headers = self.worksheet.row_values(1)
+            headers = self._headers
 
             # Append TẤT CẢ ảnh thành dòng mới — KHÔNG đè dòng folder gốc
             new_rows_data = []

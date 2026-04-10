@@ -43,32 +43,31 @@ async def main():
     input_dir = f"inputs_temp_{args.acc}" if args.acc != "default" else "inputs_temp"
     os.makedirs(input_dir, exist_ok=True)
 
-    # 3. Quét reset các dòng lỗi để bot tự chạy lại
-    print("🔄 Đang quét dòng lỗi để reset...")
-    gmanager.reset_failed_jobs()
-
     # 4. VÒNG LẶP SĂN VIỆC LIÊN TỤC (có auto-retry khi hết việc)
-    MAX_ROUNDS = 3  # Tối đa 3 vòng quét lại lỗi
+    MAX_ROUNDS = 3
     current_round = 0
     job_idx = 0
-    consecutive_web_errors = 0  # Đếm lỗi web liên tiếp để tự refresh
+    consecutive_web_errors = 0
+    first_run = True  # Lần đầu reset lỗi luôn trong checkout (tiết kiệm 1 lần tải sheet)
     while True:
-        # Giãn tải giữa các job: delay ngẫu nhiên 1-4s để 8 bot không đồng loạt gọi API
         if job_idx > 0:
             delay = random.uniform(1, 4)
             await asyncio.sleep(delay)
 
-        job = gmanager.checkout_next_job(args.acc)
+        job = gmanager.checkout_next_job(args.acc, reset_errors=first_run)
+        first_run = False
         if not job:
-            # Hết việc → quét xem còn dòng lỗi nào không, nếu có thì reset và chạy lại
             current_round += 1
             if current_round <= MAX_ROUNDS:
-                reset_count = gmanager.reset_failed_jobs()
-                if reset_count > 0:
-                    print(f"🔄 VÒNG QUÉT LẠI {current_round}/{MAX_ROUNDS}: Tìm thấy {reset_count} dòng lỗi, đang chạy lại...")
+                # Dùng checkout_next_job với reset_errors=True để gộp reset + tìm job
+                job = gmanager.checkout_next_job(args.acc, reset_errors=True)
+                if job:
+                    print(f"🔄 VÒNG QUÉT LẠI {current_round}/{MAX_ROUNDS}: Tìm thấy dòng lỗi, đang chạy lại...")
+                else:
                     continue
-            print("🎉 Hết việc trên lưới! Không còn dòng nào 'Chờ xử lý'. Bot xin phép về chuồng ngủ!")
-            break
+            if not job:
+                print("🎉 Hết việc trên lưới! Không còn dòng nào 'Chờ xử lý'. Bot xin phép về chuồng ngủ!")
+                break
 
         row_num = job['row_num']
         id_goc = job['id_anh_goc']
