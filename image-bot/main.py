@@ -157,8 +157,11 @@ async def main():
 
         except Exception as e:
             import traceback
-            print(f"Lỗi khi chạy vòng lặp Bot: {e}")
-            traceback.print_exc()
+            err_msg = traceback.format_exc()
+            print(f"❌❌❌ LỖI BOT: {e}")
+            print(err_msg)
+            with open("error_log.txt", "a", encoding="utf-8") as f:
+                f.write(f"\n{'='*50}\nDòng {row_num}: {e}\n{err_msg}\n")
             retry_count = job.get('retry_count', 0)
             if retry_count < 2:
                 gmanager.update_job_status(row_num, f"Lỗi văng App ❌ Chờ xử lý (thử lại {retry_count + 1})")
