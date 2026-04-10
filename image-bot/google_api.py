@@ -1,11 +1,14 @@
 import os
 import io
+import time
+import random
 import gspread
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
+from googleapiclient.errors import HttpError
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -17,6 +20,28 @@ SCOPES = [
 ]
 TOKEN_FILE = 'config/token.json'
 CLIENT_SECRET_FILE = 'config/client_secret.json'
+
+def _retry_api(func, max_retries=3, label="API"):
+    """Retry Google API call với exponential backoff + jitter"""
+    for attempt in range(max_retries):
+        try:
+            return func()
+        except HttpError as e:
+            status_code = e.resp.status if e.resp else 0
+            # 403 rate limit, 429 quota, 500/503 server error → retry
+            if status_code in (403, 429, 500, 503) and attempt < max_retries - 1:
+                wait = (2 ** attempt) + random.uniform(0, 1)
+                print(f"⏳ {label}: lỗi {status_code}, thử lại sau {wait:.1f}s... (lần {attempt + 1}/{max_retries})")
+                time.sleep(wait)
+            else:
+                raise
+        except Exception as e:
+            if attempt < max_retries - 1:
+                wait = (2 ** attempt) + random.uniform(0, 1)
+                print(f"⏳ {label}: lỗi [{e}], thử lại sau {wait:.1f}s... (lần {attempt + 1}/{max_retries})")
+                time.sleep(wait)
+            else:
+                raise
 
 class GoogleManager:
     def __init__(self):
@@ -194,35 +219,50 @@ class GoogleManager:
         print(f"✅ Đã reset {count} dòng lỗi về 'Chờ xử lý'.")
         return count
 
+    def _log_error(self, context, error):
+        """Ghi lỗi vào error_log.txt"""
+        try:
+            with open("error_log.txt", "a", encoding="utf-8") as f:
+                f.write(f"\n{'='*50}\n[GDrive] {context}: {error}\n")
+        except Exception:
+            pass
+
     def update_job_status(self, row_num, status, result_link=""):
         """Cập nhật trạng thái và link kết quả lên Google Sheets. Tự động rà tìm cột theo Header"""
         try:
-            # Lấy list Header xem Cột Status và Result nằm ở thứ tự cột số mấy (đề phòng User đảo cột)
             headers = self.worksheet.row_values(1)
             status_col_idx = headers.index("status") + 1 if "status" in headers else 5
             result_col_idx = headers.index("result") + 1 if "result" in headers else 6
-            
-            self.worksheet.update_cell(row_num, status_col_idx, status)
-            if result_link:
-                self.worksheet.update_cell(row_num, result_col_idx, result_link)
+
+            def _do_update():
+                self.worksheet.update_cell(row_num, status_col_idx, status)
+                if result_link:
+                    self.worksheet.update_cell(row_num, result_col_idx, result_link)
+
+            _retry_api(_do_update, max_retries=3, label=f"UpdateSheet row {row_num}")
         except Exception as e:
             print(f"Lỗi update sheet tại dòng {row_num}: {e}")
+            self._log_error(f"UpdateSheet row {row_num}", e)
 
     def download_file_from_drive(self, file_id, save_path):
         """Tải file ảnh gốc từ Google Drive xuống vùng nhớ tạm của máy tính"""
         try:
             file_id = self.extract_drive_id(file_id)
-                
-            request = self.drive_service.files().get_media(fileId=file_id)
-            fh = io.FileIO(save_path, 'wb')
-            downloader = MediaIoBaseDownload(fh, request)
-            done = False
-            while done is False:
-                status, done = downloader.next_chunk()
-            print(f"✅ Đã tải thành công ảnh gốc xuống máy (ID: {...})")
+
+            def _do_download():
+                request = self.drive_service.files().get_media(fileId=file_id)
+                fh = io.FileIO(save_path, 'wb')
+                downloader = MediaIoBaseDownload(fh, request)
+                done = False
+                while done is False:
+                    status, done = downloader.next_chunk()
+
+            _retry_api(_do_download, max_retries=4, label=f"Download {file_id[:8]}")
+            print(f"✅ Đã tải thành công ảnh gốc xuống máy (ID: {file_id[:8]}...)")
             return True
         except Exception as e:
-            print(f"❌ Lỗi Tải File từ G-Drive (Hãy check quyền chia sẻ cho Bot của ID: {file_id}): {e}")
+            print(f"❌ Lỗi Tải File từ G-Drive (ID: {file_id}): {e}")
+            self._log_error(f"Download {file_id}", e)
             return False
 
     def create_drive_folder(self, folder_name, parent_id=None):
@@ -233,8 +273,11 @@ class GoogleManager:
         }
         if parent_id:
             file_metadata['parents'] = [parent_id]
-            
-        file = self.drive_service.files().create(body=file_metadata, fields='id, webViewLink').execute()
+
+        def _do_create():
+            return self.drive_service.files().create(body=file_metadata, fields='id, webViewLink').execute()
+
+        file = _retry_api(_do_create, max_retries=3, label=f"CreateFolder {folder_name}")
         return file.get('id'), file.get('webViewLink')
 
     def resolve_output_folder(self, file_id, base_output_id):
@@ -277,12 +320,20 @@ class GoogleManager:
 
     def upload_file_to_drive(self, local_path, file_name, parent_folder_id):
         """Tải một file ảnh từ thư mục tạm /outputs_temp lên thư mục kết quả của GDrive"""
-        file_metadata = {
-            'name': file_name,
-            'parents': [parent_folder_id]
-        }
-        # Tự động nhận diện MediaType nếu là PNG/JPG
-        mimetype = 'image/png' if local_path.endswith('.png') else 'image/jpeg'
-        media = MediaFileUpload(local_path, mimetype=mimetype, resumable=True)
-        file = self.drive_service.files().create(body=file_metadata, media_body=media, fields='id').execute()
-        return file.get('id')
+        try:
+            file_metadata = {
+                'name': file_name,
+                'parents': [parent_folder_id]
+            }
+            mimetype = 'image/png' if local_path.endswith('.png') else 'image/jpeg'
+
+            def _do_upload():
+                media = MediaFileUpload(local_path, mimetype=mimetype, resumable=True)
+                return self.drive_service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+
+            result = _retry_api(_do_upload, max_retries=4, label=f"Upload {file_name}")
+            return result.get('id')
+        except Exception as e:
+            print(f"❌ Lỗi Upload {file_name}: {e}")
+            self._log_error(f"Upload {file_name}", e)
+            return None
