@@ -32,7 +32,9 @@ async def main():
     try:
         gmanager = GoogleManager()
     except Exception as e:
+        import traceback
         print(f"❌ Lỗi khởi tạo API: {e}")
+        traceback.print_exc()
         return
 
     # 2. Mở trình duyệt

@@ -159,22 +159,27 @@ class GoogleManager:
                 
         self.creds = creds
         # Google Sheets Client
+        print("  [1/4] Đang xác thực Google Sheets...")
         self.gs_client = gspread.authorize(self.creds)
         self.sheet_id = os.getenv("SPREADSHEET_ID")
         if not self.sheet_id:
             raise ValueError("Thiếu biến SPREADSHEET_ID ở file .env")
-            
-        print("Đang kết nối vào Google Sheets...")
+
+        print(f"  [2/4] Đang mở Sheet (ID: {self.sheet_id[:15]}...)...")
         self.worksheet = self.gs_client.open_by_key(self.sheet_id).sheet1
-        
+        print("  ✅ Kết nối Google Sheets thành công!")
+
         # Google Drive Client
-        print("Đang kết nối vào Google Drive...")
+        print("  [3/4] Đang kết nối Google Drive...")
         self.drive_service = build('drive', 'v3', credentials=self.creds)
+        print("  ✅ Kết nối Google Drive thành công!")
 
         # Cache header để không gọi API mỗi lần update
+        print("  [4/4] Đang đọc Header...")
         self._headers = self.worksheet.row_values(1)
         self._status_col = self._headers.index("status") + 1 if "status" in self._headers else 5
         self._result_col = self._headers.index("result") + 1 if "result" in self._headers else 6
+        print(f"  ✅ Header: {self._headers}")
 
     def _ensure_creds(self):
         """Tự động refresh token nếu hết hạn — tránh lỗi khi bot chạy lâu"""
