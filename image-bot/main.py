@@ -46,11 +46,20 @@ async def main():
     print("🔄 Đang quét dòng lỗi để reset...")
     gmanager.reset_failed_jobs()
 
-    # 4. VÒNG LẶP SĂN VIỆC LIÊN TỤC
+    # 4. VÒNG LẶP SĂN VIỆC LIÊN TỤC (có auto-retry khi hết việc)
+    MAX_ROUNDS = 3  # Tối đa 3 vòng quét lại lỗi
+    current_round = 0
     job_idx = 0
     while True:
         job = gmanager.checkout_next_job(args.acc)
         if not job:
+            # Hết việc → quét xem còn dòng lỗi nào không, nếu có thì reset và chạy lại
+            current_round += 1
+            if current_round <= MAX_ROUNDS:
+                reset_count = gmanager.reset_failed_jobs()
+                if reset_count > 0:
+                    print(f"🔄 VÒNG QUÉT LẠI {current_round}/{MAX_ROUNDS}: Tìm thấy {reset_count} dòng lỗi, đang chạy lại...")
+                    continue
             print("🎉 Hết việc trên lưới! Không còn dòng nào 'Chờ xử lý'. Bot xin phép về chuồng ngủ!")
             break
 
@@ -92,9 +101,9 @@ async def main():
             
             if not output_files_paths:
                 retry_count = job.get('retry_count', 0)
-                if retry_count < 2:
+                if retry_count < 5:
                     gmanager.update_job_status(row_num, f"Lỗi Web ❌ Chờ xử lý (thử lại {retry_count + 1})")
-                    print(f"⚠️ Cảnh báo: Bot văng lỗi. Đã thả lại dòng này vào Lưới chờ để các Bot khác (hoặc chính nó) thử lại ở vòng sau.")
+                    print(f"⚠️ Cảnh báo: Bot văng lỗi (lần {retry_count + 1}/5). Đã thả lại dòng chờ thử lại.")
                 else:
                     gmanager.update_job_status(row_num, "Lỗi Web Vĩnh Viễn ❌", result_link="Không có ảnh nào tải xuống")
                 continue
@@ -171,7 +180,7 @@ async def main():
             with open("error_log.txt", "a", encoding="utf-8") as f:
                 f.write(f"\n{'='*50}\nDòng {row_num}: {e}\n{err_msg}\n")
             retry_count = job.get('retry_count', 0)
-            if retry_count < 2:
+            if retry_count < 5:
                 gmanager.update_job_status(row_num, f"Lỗi văng App ❌ Chờ xử lý (thử lại {retry_count + 1})")
             else:
                 gmanager.update_job_status(row_num, "Lỗi Kịch Bản Vĩnh Viễn ❌")
