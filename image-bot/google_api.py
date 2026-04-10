@@ -79,23 +79,8 @@ class GoogleManager:
                     
                 row_num = index + 2
                 drive_id = self.extract_drive_id(id_anh_goc)
-                
-                # CHỐNG ĐỤNG ĐỘ TỪ CÁC TÀI KHOẢN KHÁC: GÂY NHIỄU BẰNG CÁCH KHOÁ ROW TỚI ĐÂY MỚI LÀM
-                # (Nhưng đối với folder thì ta phải kiểm tra trước khi lock dưới tư cách Bot)
-                try:
-                    meta = self.drive_service.files().get(fileId=drive_id, fields="mimeType").execute()
-                    if meta.get('mimeType') == 'application/vnd.google-apps.folder':
-                        self.update_job_status(row_num, f"Đang bung Folder... 📂 ({acc_name})")
-                        print(f"📂 HỐ ĐEN XUẤT HIỆN: Dòng {row_num} là một Thư mục! Đang tiến hành phân rã...")
-                        expanded_id = self.expand_folder_into_jobs(row_num, drive_id, row)
-                        # Folder đã bung thành dòng mới → skip dòng này, bot sẽ bốc dòng ảnh mới ở vòng sau
-                        continue
-                except Exception as e:
-                    # Nếu báo lỗi permission hoặc lỗi cùi bắp, cứ mặc kệ ném vào lưới như một cái File thông thường
-                    pass
-                
-                
-                # Bóc tách xem dòng này đã thử lại thất bại bao nhiêu lần rồi (Ngăn vòng lặp vô hạn)
+
+                # Bóc tách retry count trước khi lock
                 retry_count = 0
                 if "thử lại" in status:
                     import re
@@ -103,9 +88,19 @@ class GoogleManager:
                     if match:
                         retry_count = int(match.group(1))
 
-                row_num = index + 2       
-                # KHOÁ DÒNG NGAY LẬP TỨC ĐỂ ACC KHÁC KHÔNG DÀNH ĐƯỢC
+                # KHOÁ DÒNG NGAY LẬP TỨC ĐỂ ACC KHÁC KHÔNG DÀNH ĐƯỢC (lock TRƯỚC khi check folder)
                 self.update_job_status(row_num, f"Đang chạy ({acc_name}) 🤖")
+
+                # Kiểm tra nếu là folder thì bung ra thành các dòng ảnh
+                try:
+                    meta = self.drive_service.files().get(fileId=drive_id, fields="mimeType").execute()
+                    if meta.get('mimeType') == 'application/vnd.google-apps.folder':
+                        self.update_job_status(row_num, f"Đang bung Folder... 📂 ({acc_name})")
+                        print(f"📂 HỐ ĐEN XUẤT HIỆN: Dòng {row_num} là một Thư mục! Đang tiến hành phân rã...")
+                        self.expand_folder_into_jobs(row_num, drive_id, row)
+                        continue
+                except Exception as e:
+                    pass
                 
                 # Trích xuất data
                 sl_str = str(clean_row.get("so_luong", "4")).strip()
