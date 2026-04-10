@@ -24,6 +24,7 @@ class ImageBotCore:
             user_agent=fake_user_agent,
             accept_downloads=True,
             downloads_path=os.path.abspath(self.download_dir),
+            viewport={"width": 1920, "height": 1080},
             args=[
                 '--disable-blink-features=AutomationControlled', # Áo tàng hình che mắt Google
                 '--disable-features=DownloadBubble,DownloadBubbleV2' # Cấm cửa Chrome nổi cái bảng Download
