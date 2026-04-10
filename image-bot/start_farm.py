@@ -8,6 +8,7 @@ def main():
     parser = argparse.ArgumentParser(description="Image Bot Farm Orchestrator")
     parser.add_argument("--accounts", type=str, required=True, help="Danh sách tên các tài khoản cách nhau bằng dấu phẩy (vd: minnie,avocado,tom)")
     parser.add_argument("--headless", action="store_true", help="Chạy ẩn (không mở Window Chrome tĩnh)")
+    parser.add_argument("--no-cut", action="store_true", help="Chỉ upscale, không cắt nền")
     args = parser.parse_args()
 
     accounts = [acc.strip() for acc in args.accounts.split(",") if acc.strip()]
@@ -47,6 +48,8 @@ def main():
         cmd = [python_exec, "-u", "main.py", "--acc", acc]
         if args.headless:
             cmd.append("--headless")
+        if args.no_cut:
+            cmd.append("--no-cut")
             
         print(f"👉 Khởi động Luồng [ {acc} ] -> Xem nhật ký tại: logs/{acc}.log")
         
