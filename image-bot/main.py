@@ -181,9 +181,10 @@ async def main():
 
             # Cập nhật kết quả
             consecutive_web_errors = 0  # Reset khi job thành công
-            if len(processed_paths) > 0:
+            total_uploaded = len(upscaled_paths) + len(processed_paths)
+            if total_uploaded > 0:
                 gmanager.update_job_status(row_num, "Xong ✅", result_link=link_share)
-                print(f"🎉 HOÀN TẤT! {len(processed_paths)} ảnh đã lên Drive. Link: {link_share}")
+                print(f"🎉 HOÀN TẤT! {len(upscaled_paths)} upscaled + {len(processed_paths)} processed đã lên Drive.")
             else:
                 gmanager.update_job_status(row_num, "Lỗi Xử Lý Ảnh ❌", result_link="Không có ảnh nào xử lý thành công")
                 print(f"❌ TOÀN BỘ ảnh xử lý thất bại cho dòng {row_num}")

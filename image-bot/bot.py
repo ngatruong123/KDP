@@ -70,59 +70,73 @@ class ImageBotCore:
         """Xoá chip ảnh và chữ cũ bên trong ô Prompt để tránh bị trùng lặp ở vòng sau"""
         print("🧹 Đang dọn sạch Prompt và Chip Ảnh cũ trên Canvas...")
         try:
-            # 1. Xoá Prompt cũ (Việc Xoá Bằng Ctrl+A cũng sẽ XÓA BONG luôn các con chip Ảnh bị gắn dính vào nó)
+            # 1. Xoá Prompt cũ — thử tối đa 3 lần để chắc chắn xoá sạch
             input_boxes = self.page.locator("textarea[placeholder*='Bạn muốn tạo gì']:visible, [contenteditable='true']:visible, textarea:not(.g-recaptcha-response):visible, input[type='text']:not([type='hidden']):visible")
-            if await input_boxes.count() > 0:
-                active_box = input_boxes.last
-                await active_box.click(force=True)
-                await self.page.keyboard.press("Meta+A")
-                await self.page.keyboard.press("Control+A") 
-                await self.page.keyboard.press("Backspace")
-                await asyncio.sleep(0.5)
-            
-            # 2. Xóa các con Chip Hình Ảnh (Thumbnails) đính kèm phía trên ô nhập Lệnh
-            # Dò tất cả ảnh trên trang, nếu Kích thước Siêu Nhỏ (<150px) -> Chắc chắn là Chip trong Prompt!
+            for attempt in range(3):
+                if await input_boxes.count() > 0:
+                    active_box = input_boxes.last
+                    await active_box.click(force=True)
+                    await asyncio.sleep(0.3)
+                    await self.page.keyboard.press("Meta+A")
+                    await self.page.keyboard.press("Control+A")
+                    await self.page.keyboard.press("Backspace")
+                    await asyncio.sleep(0.5)
+
+                    # Verify đã xoá sạch chưa
+                    remaining = await active_box.input_value() if await active_box.count() > 0 else ""
+                    if not remaining or len(remaining.strip()) == 0:
+                        break
+                    print(f"   ⚠️ Prompt chưa xoá sạch (lần {attempt + 1}), thử lại...")
+
+            # 2. Xóa các con Chip Hình Ảnh nhỏ (<150px) đính kèm trong Prompt
             all_imgs = await self.page.locator("img").all()
             for img in all_imgs:
-                src = await img.get_attribute("src")
-                if src and src.startswith("blob:"):
-                    bb = await img.bounding_box()
-                    if bb and bb['width'] < 150 and bb['height'] < 150:
-                        # 1. Báo cáo Tọa độ của con Chip ảnh
-                        target_x = bb['x'] + bb['width']    # Cạnh phải của Chip
-                        target_y = bb['y']                  # Cạnh trên của Chip
-                        
-                        # Rê chuột để Nút X nổi lên
-                        await img.hover(force=True)
-                        await asyncio.sleep(0.5)
-                        
-                        # 2. Rà toàn trang tìm cục Nút nào Nằm Sát Sịt Cạnh góc (Toạ độ hình học)
-                        all_btns = await self.page.locator("button:visible, div[role='button']:visible, span[role='button']:visible").all()
-                        min_dist = 999999
-                        x_btn_to_click = None
-                        
-                        for b in all_btns:
-                            b_bb = await b.bounding_box()
-                            if not b_bb or b_bb['width'] > 40 or b_bb['height'] > 40: continue
-                            
-                            btn_cx = b_bb['x'] + b_bb['width'] / 2
-                            btn_cy = b_bb['y'] + b_bb['height'] / 2
-                            dist = (btn_cx - target_x)**2 + (btn_cy - target_y)**2
-                            
-                            # Quét bán kính cực gần (~63px) để tóm cổ đích danh Nút X của chính cái Chip này
-                            if dist < 4000 and dist < min_dist:
-                                min_dist = dist
-                                x_btn_to_click = b
-                                
-                        if x_btn_to_click:
-                            await x_btn_to_click.click(force=True)
-                            await asyncio.sleep(0.8)
-            
-            # KHÔNG XÓA NODE ẢNH TO TRÊN CANVAS (Node Input) vì Lệnh Delete dọn bay luôn khe Upload.
-            # Vòng sau Bot tự ném đè file mới vào <input type='file'> là Khung ảnh to tự động thay ruột.
-            print("✅ Đã dọn khu vực Prompt hoàn tất! Cấu trúc Node nguyên vẹn.")
+                try:
+                    src = await img.get_attribute("src")
+                    if src and src.startswith("blob:"):
+                        bb = await img.bounding_box()
+                        if bb and bb['width'] < 150 and bb['height'] < 150:
+                            target_x = bb['x'] + bb['width']
+                            target_y = bb['y']
+
+                            await img.hover(force=True)
+                            await asyncio.sleep(0.5)
+
+                            all_btns = await self.page.locator("button:visible, div[role='button']:visible, span[role='button']:visible").all()
+                            min_dist = 999999
+                            x_btn_to_click = None
+
+                            for b in all_btns:
+                                b_bb = await b.bounding_box()
+                                if not b_bb or b_bb['width'] > 40 or b_bb['height'] > 40: continue
+                                btn_cx = b_bb['x'] + b_bb['width'] / 2
+                                btn_cy = b_bb['y'] + b_bb['height'] / 2
+                                dist = (btn_cx - target_x)**2 + (btn_cy - target_y)**2
+                                if dist < 4000 and dist < min_dist:
+                                    min_dist = dist
+                                    x_btn_to_click = b
+
+                            if x_btn_to_click:
+                                await x_btn_to_click.click(force=True)
+                                await asyncio.sleep(0.8)
+                except Exception:
+                    pass  # Skip chip lỗi, tiếp tục xoá chip khác
+
+            # 3. Verify cuối: fill rỗng ô prompt bằng JS để chắc chắn 100%
+            if await input_boxes.count() > 0:
+                await input_boxes.last.fill("")
+                await asyncio.sleep(0.3)
+
+            print("✅ Đã dọn khu vực Prompt hoàn tất!")
         except Exception as e:
-            print(f"⚠️ Thất bại khi dọn rác Canvas (Bỏ qua tiếp tục chạy): {e}")
+            print(f"⚠️ Thất bại khi dọn rác Canvas: {e}. Đang reload trang...")
+            try:
+                await self.page.reload(wait_until="domcontentloaded", timeout=30000)
+                await asyncio.sleep(2)
+                await self.page.wait_for_selector("input[type='file']", state="attached", timeout=20000)
+                print("✅ Reload xong, Canvas sạch!")
+            except Exception as e2:
+                print(f"❌ Reload cũng thất bại: {e2}")
 
 
     async def process_image_job(self, row_num, input_image_path, prompt, ratio, qty_per_loop, total_qty, download_reso="2K"):
