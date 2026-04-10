@@ -17,9 +17,9 @@ from dotenv import load_dotenv
 socket.setdefaulttimeout(30)
 
 # === CROSS-PROCESS BANDWIDTH LIMITER ===
-# Giới hạn tối đa 3 bot download/upload Drive cùng lúc (dùng file lock)
+# Giới hạn tối đa 2 bot download/upload Drive cùng lúc (tránh nghẽn mạng)
 _LOCK_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".drive_locks")
-_MAX_CONCURRENT = 3
+_MAX_CONCURRENT = 2
 
 class _DriveBandwidthLimiter:
     """File-based semaphore để giới hạn số process gọi Drive API đồng thời."""
