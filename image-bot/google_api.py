@@ -314,13 +314,21 @@ class GoogleManager:
             file_id = self.extract_drive_id(file_id)
 
             def _do_download():
+                # Xoá file cũ từ lần retry trước (tránh lock conflict)
+                if os.path.exists(save_path):
+                    try: os.remove(save_path)
+                    except Exception: pass
                 request = self.drive_service.files().get_media(fileId=file_id)
-                fh = io.FileIO(save_path, 'wb')
-                downloader = MediaIoBaseDownload(fh, request)
-                done = False
-                while done is False:
-                    status, done = downloader.next_chunk()
-                fh.close()
+                fh = None
+                try:
+                    fh = io.FileIO(save_path, 'wb')
+                    downloader = MediaIoBaseDownload(fh, request)
+                    done = False
+                    while done is False:
+                        status, done = downloader.next_chunk()
+                finally:
+                    if fh:
+                        fh.close()
 
             limiter.acquire()
             _retry_api(_do_download, max_retries=5, label=f"Download {file_id[:8]}")
