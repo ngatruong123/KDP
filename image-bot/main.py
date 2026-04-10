@@ -1,6 +1,7 @@
 import os
 import asyncio
 import argparse
+import random
 from google_api import GoogleManager
 from bot import ImageBotCore
 from kdp_local_bot import process_single_image
@@ -50,7 +51,13 @@ async def main():
     MAX_ROUNDS = 3  # Tối đa 3 vòng quét lại lỗi
     current_round = 0
     job_idx = 0
+    consecutive_web_errors = 0  # Đếm lỗi web liên tiếp để tự refresh
     while True:
+        # Giãn tải giữa các job: delay ngẫu nhiên 1-4s để 8 bot không đồng loạt gọi API
+        if job_idx > 0:
+            delay = random.uniform(1, 4)
+            await asyncio.sleep(delay)
+
         job = gmanager.checkout_next_job(args.acc)
         if not job:
             # Hết việc → quét xem còn dòng lỗi nào không, nếu có thì reset và chạy lại
@@ -100,12 +107,25 @@ async def main():
             output_files_paths = await bot.process_image_job(row_num, input_path, prompt, job['aspect_ratio'], so_luong, tong_so_luong, download_reso)
             
             if not output_files_paths:
+                consecutive_web_errors += 1
                 retry_count = job.get('retry_count', 0)
                 if retry_count < 5:
                     gmanager.update_job_status(row_num, f"Lỗi Web ❌ Chờ xử lý (thử lại {retry_count + 1})")
                     print(f"⚠️ Cảnh báo: Bot văng lỗi (lần {retry_count + 1}/5). Đã thả lại dòng chờ thử lại.")
                 else:
                     gmanager.update_job_status(row_num, "Lỗi Web Vĩnh Viễn ❌", result_link="Không có ảnh nào tải xuống")
+
+                # Nếu lỗi web 3 lần liên tiếp → refresh trang để phục hồi session
+                if consecutive_web_errors >= 3:
+                    print("🔄 Lỗi web 3 lần liên tiếp! Đang refresh trình duyệt...")
+                    try:
+                        await bot.page.reload(wait_until="domcontentloaded", timeout=30000)
+                        await asyncio.sleep(3)
+                        await bot.check_login_and_navigate()
+                        consecutive_web_errors = 0
+                        print("✅ Refresh thành công! Tiếp tục chạy.")
+                    except Exception as e:
+                        print(f"❌ Refresh thất bại: {e}")
                 continue
 
             # KHỞI TẠO ĐỊNH TUYẾN: CHUẨN BỊ LƯU TRỮ VÀO GOOGLE DRIVE
@@ -156,6 +176,7 @@ async def main():
                 link_share = f"https://drive.google.com/drive/folders/{processed_folder_id}"
 
             # Cập nhật kết quả
+            consecutive_web_errors = 0  # Reset khi job thành công
             if len(processed_paths) > 0:
                 gmanager.update_job_status(row_num, "Xong ✅", result_link=link_share)
                 print(f"🎉 HOÀN TẤT! {len(processed_paths)} ảnh đã lên Drive. Link: {link_share}")

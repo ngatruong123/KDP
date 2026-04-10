@@ -57,8 +57,8 @@ def main():
         p = subprocess.Popen(cmd, stdout=log_file, stderr=log_file, env=env)
         processes.append((acc, p, log_file))
         
-        # Để các acc không tranh nhau gọi Google API cùng một tíc tắc gây quá tải lúc khởi động
-        time.sleep(2)
+        # Để các acc không tranh nhau gọi Google API cùng một tíc tắc gây quá tải lúc khởi động (8 bot cần giãn xa hơn)
+        time.sleep(5)
         
     print("\n✅ TẤT CẢ LUỒNG ĐÃ ĐƯỢC THẢ RA CÀY. Để tắt toàn bộ Nông trại, bấm Tổ hợp phím Ctrl + C ở cửa sổ này.")
     
