@@ -88,12 +88,8 @@ class GoogleManager:
                         self.update_job_status(row_num, f"Đang bung Folder... 📂 ({acc_name})")
                         print(f"📂 HỐ ĐEN XUẤT HIỆN: Dòng {row_num} là một Thư mục! Đang tiến hành phân rã...")
                         expanded_id = self.expand_folder_into_jobs(row_num, drive_id, row)
-                        if expanded_id:
-                            # Đổi vỏ bọc, id_anh_goc bây giờ là ảnh ĐẦU TIÊN để bot chạy tiếp như bình thường
-                            id_anh_goc = expanded_id
-                        else:
-                            self.update_job_status(row_num, "Lỗi Tải GDrive ❌ (Folder Rỗng)")
-                            continue
+                        # Folder đã bung thành dòng mới → skip dòng này, bot sẽ bốc dòng ảnh mới ở vòng sau
+                        continue
                 except Exception as e:
                     # Nếu báo lỗi permission hoặc lỗi cùi bắp, cứ mặc kệ ném vào lưới như một cái File thông thường
                     pass
@@ -147,43 +143,37 @@ class GoogleManager:
         except Exception: return raw_link
 
     def expand_folder_into_jobs(self, row_num, folder_id, original_row_dict):
-        """Hút sạch hình ảnh trong Folder và bơm ngược xuống đáy Bảng tính làm thức ăn cho Nông trại"""
+        """Hút sạch hình ảnh trong Folder và bơm xuống đáy Bảng tính. KHÔNG đè link folder gốc."""
         query = f"'{folder_id}' in parents and trashed=false and (mimeType contains 'image/jpeg' or mimeType contains 'image/png' or mimeType contains 'image/webp')"
         try:
             results = self.drive_service.files().list(q=query, fields="files(id, name)", pageSize=1000).execute()
             files = results.get('files', [])
             if not files: return None
-            
+
             headers = self.worksheet.row_values(1)
             first_file_id = files[0]['id']
-            
-            # Cập nhật Dòng Gốc thành Tấm số 1
-            id_col_idx = headers.index("id_anh_goc") + 1 if "id_anh_goc" in headers else 1 # Note: row_values string header might vary, but users rare change header ID
-            # Cách an toàn nhất để kiếm cột id_anh_goc (không phân biệt hoa thường)
-            for i, h in enumerate(headers):
-                if str(h).strip().lower() == "id_anh_goc":
-                    id_col_idx = i + 1
-                    
-            self.worksheet.update_cell(row_num, id_col_idx, first_file_id)
-            
-            # Kéo đẻ N-1 bản sao
-            if len(files) > 1:
-                new_rows_data = []
-                for f in files[1:]:
-                    row_arr = []
-                    for h in headers:
-                        val = original_row_dict.get(h, "")
-                        h_lower = str(h).strip().lower()
-                        if h_lower == "id_anh_goc": val = f['id']
-                        elif h_lower == "status": val = "Chờ xử lý"
-                        elif h_lower == "result": val = ""
-                        row_arr.append(val)
-                    new_rows_data.append(row_arr)
-                    
-                if new_rows_data:
-                    self.worksheet.append_rows(new_rows_data, value_input_option='USER_ENTERED')
-                    print(f"🎉 SUẤT SẮC! Đã bơm chéo {len(new_rows_data)} tấm ảnh mới (Bản sao Prompt) xuống đáy Google Sheet!")
-            return first_file_id
+
+            # Append TẤT CẢ ảnh (kể cả ảnh đầu) thành dòng mới — KHÔNG đè dòng folder gốc
+            new_rows_data = []
+            for f in files:
+                row_arr = []
+                for h in headers:
+                    val = original_row_dict.get(h, "")
+                    h_lower = str(h).strip().lower()
+                    if h_lower == "id_anh_goc": val = f['id']
+                    elif h_lower == "status": val = "Chờ xử lý"
+                    elif h_lower == "result": val = ""
+                    row_arr.append(val)
+                new_rows_data.append(row_arr)
+
+            if new_rows_data:
+                self.worksheet.append_rows(new_rows_data, value_input_option='USER_ENTERED')
+                print(f"🎉 Đã bơm {len(new_rows_data)} tấm ảnh từ Folder xuống đáy Google Sheet!")
+
+            # Đánh dấu dòng folder gốc là đã xử lý — giữ nguyên link folder
+            self.update_job_status(row_num, f"Đã bung {len(files)} ảnh ✅")
+
+            return None  # Trả None để bot bỏ qua dòng folder, chạy các dòng ảnh mới
         except Exception as e:
             print(f"⚠️ Lỗi phân rã Thư mục Drive: {e}")
             return None
