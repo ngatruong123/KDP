@@ -3,6 +3,7 @@ import io
 import time
 import random
 import socket
+import threading
 import gspread
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
@@ -14,6 +15,64 @@ from dotenv import load_dotenv
 
 # Set socket timeout 30s để không bị treo 2 phút khi mạng nghẽn
 socket.setdefaulttimeout(30)
+
+# === CROSS-PROCESS BANDWIDTH LIMITER ===
+# Giới hạn tối đa 3 bot download/upload Drive cùng lúc (dùng file lock)
+_LOCK_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".drive_locks")
+_MAX_CONCURRENT = 3
+
+class _DriveBandwidthLimiter:
+    """File-based semaphore để giới hạn số process gọi Drive API đồng thời."""
+
+    def __init__(self):
+        os.makedirs(_LOCK_DIR, exist_ok=True)
+        self._slot = None
+
+    def acquire(self, timeout=120):
+        """Chờ đến khi có slot trống (tối đa timeout giây)."""
+        start = time.time()
+        while time.time() - start < timeout:
+            for i in range(_MAX_CONCURRENT):
+                lock_file = os.path.join(_LOCK_DIR, f"slot_{i}.lock")
+                try:
+                    # Tạo file lock exclusive — nếu file đã tồn tại thì skip
+                    fd = os.open(lock_file, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                    os.write(fd, str(os.getpid()).encode())
+                    os.close(fd)
+                    self._slot = lock_file
+                    return True
+                except FileExistsError:
+                    # Kiểm tra xem process giữ lock còn sống không
+                    try:
+                        with open(lock_file, 'r') as f:
+                            pid = int(f.read().strip())
+                        # Thử gửi signal 0 để check process còn sống
+                        os.kill(pid, 0)
+                    except (ValueError, ProcessLookupError, PermissionError, OSError):
+                        # Process đã chết → xoá lock cũ
+                        try: os.remove(lock_file)
+                        except Exception: pass
+                    continue
+            # Không có slot trống, chờ 1-2s rồi thử lại
+            time.sleep(random.uniform(1, 2))
+        # Timeout → cho chạy luôn (tốt hơn là block mãi)
+        return False
+
+    def release(self):
+        """Trả lại slot."""
+        if self._slot and os.path.exists(self._slot):
+            try: os.remove(self._slot)
+            except Exception: pass
+            self._slot = None
+
+    def __enter__(self):
+        self.acquire()
+        return self
+
+    def __exit__(self, *args):
+        self.release()
+
+_bandwidth_limiter_lock = threading.Lock()
 
 load_dotenv()
 
@@ -250,6 +309,7 @@ class GoogleManager:
 
     def download_file_from_drive(self, file_id, save_path):
         """Tải file ảnh gốc từ Google Drive xuống vùng nhớ tạm của máy tính"""
+        limiter = _DriveBandwidthLimiter()
         try:
             file_id = self.extract_drive_id(file_id)
 
@@ -262,13 +322,15 @@ class GoogleManager:
                     status, done = downloader.next_chunk()
                 fh.close()
 
+            limiter.acquire()
             _retry_api(_do_download, max_retries=5, label=f"Download {file_id[:8]}")
+            limiter.release()
             print(f"✅ Đã tải thành công ảnh gốc xuống máy (ID: {file_id[:8]}...)")
             return True
         except Exception as e:
+            limiter.release()
             print(f"❌ Lỗi Tải File từ G-Drive (ID: {file_id}): {e}")
             self._log_error(f"Download {file_id}", e)
-            # Xoá file rỗng/hỏng nếu download dở dang
             if os.path.exists(save_path):
                 try: os.remove(save_path)
                 except Exception: pass
@@ -329,6 +391,7 @@ class GoogleManager:
 
     def upload_file_to_drive(self, local_path, file_name, parent_folder_id):
         """Tải một file ảnh từ thư mục tạm /outputs_temp lên thư mục kết quả của GDrive"""
+        limiter = _DriveBandwidthLimiter()
         try:
             file_metadata = {
                 'name': file_name,
@@ -340,9 +403,12 @@ class GoogleManager:
                 media = MediaFileUpload(local_path, mimetype=mimetype, resumable=True)
                 return self.drive_service.files().create(body=file_metadata, media_body=media, fields='id').execute()
 
+            limiter.acquire()
             result = _retry_api(_do_upload, max_retries=4, label=f"Upload {file_name}")
+            limiter.release()
             return result.get('id')
         except Exception as e:
+            limiter.release()
             print(f"❌ Lỗi Upload {file_name}: {e}")
             self._log_error(f"Upload {file_name}", e)
             return None
