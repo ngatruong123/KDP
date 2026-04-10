@@ -67,76 +67,8 @@ class ImageBotCore:
                     await self.page.pause()
 
     async def clear_previous_job(self):
-        """Xoá chip ảnh và chữ cũ bên trong ô Prompt để tránh bị trùng lặp ở vòng sau"""
-        print("🧹 Đang dọn sạch Prompt và Chip Ảnh cũ trên Canvas...")
-        try:
-            # 1. Xoá Prompt cũ — thử tối đa 3 lần để chắc chắn xoá sạch
-            input_boxes = self.page.locator("textarea[placeholder*='Bạn muốn tạo gì']:visible, [contenteditable='true']:visible, textarea:not(.g-recaptcha-response):visible, input[type='text']:not([type='hidden']):visible")
-            for attempt in range(3):
-                if await input_boxes.count() > 0:
-                    active_box = input_boxes.last
-                    await active_box.click(force=True)
-                    await asyncio.sleep(0.3)
-                    await self.page.keyboard.press("Meta+A")
-                    await self.page.keyboard.press("Control+A")
-                    await self.page.keyboard.press("Backspace")
-                    await asyncio.sleep(0.5)
-
-                    # Verify đã xoá sạch chưa
-                    remaining = await active_box.input_value() if await active_box.count() > 0 else ""
-                    if not remaining or len(remaining.strip()) == 0:
-                        break
-                    print(f"   ⚠️ Prompt chưa xoá sạch (lần {attempt + 1}), thử lại...")
-
-            # 2. Xóa các con Chip Hình Ảnh nhỏ (<150px) đính kèm trong Prompt
-            all_imgs = await self.page.locator("img").all()
-            for img in all_imgs:
-                try:
-                    src = await img.get_attribute("src")
-                    if src and src.startswith("blob:"):
-                        bb = await img.bounding_box()
-                        if bb and bb['width'] < 150 and bb['height'] < 150:
-                            target_x = bb['x'] + bb['width']
-                            target_y = bb['y']
-
-                            await img.hover(force=True)
-                            await asyncio.sleep(0.5)
-
-                            all_btns = await self.page.locator("button:visible, div[role='button']:visible, span[role='button']:visible").all()
-                            min_dist = 999999
-                            x_btn_to_click = None
-
-                            for b in all_btns:
-                                b_bb = await b.bounding_box()
-                                if not b_bb or b_bb['width'] > 40 or b_bb['height'] > 40: continue
-                                btn_cx = b_bb['x'] + b_bb['width'] / 2
-                                btn_cy = b_bb['y'] + b_bb['height'] / 2
-                                dist = (btn_cx - target_x)**2 + (btn_cy - target_y)**2
-                                if dist < 4000 and dist < min_dist:
-                                    min_dist = dist
-                                    x_btn_to_click = b
-
-                            if x_btn_to_click:
-                                await x_btn_to_click.click(force=True)
-                                await asyncio.sleep(0.8)
-                except Exception:
-                    pass  # Skip chip lỗi, tiếp tục xoá chip khác
-
-            # 3. Verify cuối: fill rỗng ô prompt bằng JS để chắc chắn 100%
-            if await input_boxes.count() > 0:
-                await input_boxes.last.fill("")
-                await asyncio.sleep(0.3)
-
-            print("✅ Đã dọn khu vực Prompt hoàn tất!")
-        except Exception as e:
-            print(f"⚠️ Thất bại khi dọn rác Canvas: {e}. Đang reload trang...")
-            try:
-                await self.page.reload(wait_until="domcontentloaded", timeout=30000)
-                await asyncio.sleep(2)
-                await self.page.wait_for_selector("input[type='file']", state="attached", timeout=20000)
-                print("✅ Reload xong, Canvas sạch!")
-            except Exception as e2:
-                print(f"❌ Reload cũng thất bại: {e2}")
+        """Chờ nhẹ giữa các job — prompt/ảnh cũ đã được Canvas tự xoá khi tạo ảnh mới"""
+        await asyncio.sleep(0.5)
 
 
     async def process_image_job(self, row_num, input_image_path, prompt, ratio, qty_per_loop, total_qty, download_reso="2K"):
@@ -389,21 +321,31 @@ class ImageBotCore:
 
                     await asyncio.sleep(0.2)
 
-                    # Hover tile: force=True để trigger CSS hover mà không scroll
-                    await tile.hover(force=True)
-                    await asyncio.sleep(1.0)
+                    # Scroll tile vào viewport trước khi hover (fix ảnh 3,4 bị khuất)
+                    await tile.evaluate("el => el.scrollIntoViewIfNeeded()")
+                    await asyncio.sleep(0.3)
 
-                    # Tìm nút 3 chấm BÊN TRONG tile
+                    # Hover tile: dùng hover() thường (có scroll) thay vì force=True
                     menu_btn = None
-                    tile_btns = await tile.locator("button:visible").all()
+                    for hover_attempt in range(3):
+                        await tile.hover()
+                        await asyncio.sleep(1.0)
 
-                    # Fallback: mouse.move vào tâm ảnh nếu chưa thấy nút
-                    if len(tile_btns) == 0:
-                        img_bb_pre = await img_node.bounding_box()
-                        if img_bb_pre:
-                            await self.page.mouse.move(img_bb_pre['x'] + img_bb_pre['width']/2, img_bb_pre['y'] + img_bb_pre['height']/2)
-                            await asyncio.sleep(1.0)
-                            tile_btns = await tile.locator("button:visible").all()
+                        # Tìm nút 3 chấm BÊN TRONG tile
+                        tile_btns = await tile.locator("button:visible").all()
+
+                        # Fallback: mouse.move vào tâm ảnh nếu chưa thấy nút
+                        if len(tile_btns) == 0:
+                            img_bb_pre = await img_node.bounding_box()
+                            if img_bb_pre:
+                                await self.page.mouse.move(img_bb_pre['x'] + img_bb_pre['width']/2, img_bb_pre['y'] + img_bb_pre['height']/2)
+                                await asyncio.sleep(1.0)
+                                tile_btns = await tile.locator("button:visible").all()
+
+                        if len(tile_btns) > 0:
+                            break
+                        if hover_attempt < 2:
+                            print(f"   🔄 Hover lần {hover_attempt+1} chưa thấy nút, thử lại...")
 
                     if len(tile_btns) > 0:
                         img_bb = await img_node.bounding_box()
