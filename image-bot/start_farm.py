@@ -4,89 +4,164 @@ import subprocess
 import argparse
 import time
 
+MAX_CONSECUTIVE_ERRORS = 5
+ERROR_KEYWORDS = ["Lỗi Web Vĩnh Viễn", "LỖI CHÍ MẠNG", "Lỗi khởi tạo API", "Thất bại khi dọn rác", "Không gài được ảnh", "TIMEOUT"]
+
+def count_recent_errors(log_path, last_pos):
+    """Đọc log từ vị trí cuối cùng, đếm lỗi liên tiếp gần nhất"""
+    try:
+        with open(log_path, "r", encoding="utf-8") as f:
+            f.seek(last_pos)
+            new_content = f.read()
+            new_pos = f.tell()
+
+        if not new_content:
+            return 0, new_pos
+
+        errors = 0
+        for line in new_content.strip().split("\n"):
+            if any(kw in line for kw in ERROR_KEYWORDS):
+                errors += 1
+            elif "✅" in line or "📥" in line or "🎉" in line:
+                errors = 0  # Reset khi có thành công
+
+        return errors, new_pos
+    except Exception:
+        return 0, last_pos
+
+def spawn_bot(acc, python_exec, headless, no_cut):
+    """Khởi động 1 bot, trả về (process, log_file)"""
+    log_file = open(f"logs/{acc}.log", "w", encoding="utf-8")
+    env = os.environ.copy()
+    env["PYTHONUTF8"] = "1"
+    cmd = [python_exec, "-u", "main.py", "--acc", acc]
+    if headless:
+        cmd.append("--headless")
+    if no_cut:
+        cmd.append("--no-cut")
+
+    p = subprocess.Popen(cmd, stdout=log_file, stderr=log_file, env=env)
+    return p, log_file
+
 def main():
     parser = argparse.ArgumentParser(description="Image Bot Farm Orchestrator")
     parser.add_argument("--accounts", type=str, required=True, help="Danh sách tên các tài khoản cách nhau bằng dấu phẩy (vd: minnie,avocado,tom)")
+    parser.add_argument("--backup-accounts", type=str, default="", help="Danh sách acc dự bị (vd: backup1,backup2)")
     parser.add_argument("--headless", action="store_true", help="Chạy ẩn (không mở Window Chrome tĩnh)")
     parser.add_argument("--no-cut", action="store_true", help="Chỉ upscale, không cắt nền")
     args = parser.parse_args()
 
     accounts = [acc.strip() for acc in args.accounts.split(",") if acc.strip()]
+    backup_accounts = [acc.strip() for acc in args.backup_accounts.split(",") if acc.strip()]
+
     if not accounts:
         print("❌ Lỗi: Cần cung cấp ít nhất 1 tài khoản!")
         return
 
     # Tạo thư mục log
     os.makedirs("logs", exist_ok=True)
-    
-    print("========================================")
-    print(f"🚀 KHỞI ĐỘNG NÔNG TRẠI BOT ({len(accounts)} Accounts)")
-    print("========================================")
-    
-    processes = []
-    
-    # Kích hoạt venv (nếu chạy qua lệnh này, nó sẽ dùng python trong venv nếu có)
+
+    # Tìm python exec
     python_exec = "python3"
     if os.name == "nt":
-        # Windows
         if os.path.exists("venv\\Scripts\\python.exe"):
             python_exec = "venv\\Scripts\\python.exe"
         else:
             python_exec = "python"
     else:
-        # Mac/Linux
         if os.path.exists("venv/bin/python"):
             python_exec = "venv/bin/python"
-    
-    for acc in accounts:
-        log_file = open(f"logs/{acc}.log", "w", encoding="utf-8")
 
-        # Thêm cờ -u (unbuffered) để ép hệ thống Python nhả ngay lập tức Text ra File, không bị trắng trơn Log.
-        # PYTHONUTF8=1 ép Python dùng UTF-8 thay vì cp1252 trên Windows (fix lỗi emoji)
-        env = os.environ.copy()
-        env["PYTHONUTF8"] = "1"
-        cmd = [python_exec, "-u", "main.py", "--acc", acc]
-        if args.headless:
-            cmd.append("--headless")
-        if args.no_cut:
-            cmd.append("--no-cut")
-            
-        print(f"👉 Khởi động Luồng [ {acc} ] -> Xem nhật ký tại: logs/{acc}.log")
-        
-        # Chạy ngầm tiến trình (Non-blocking)
-        p = subprocess.Popen(cmd, stdout=log_file, stderr=log_file, env=env)
-        processes.append((acc, p, log_file))
-        
-        # Để các acc không tranh nhau gọi Google API cùng một tíc tắc gây quá tải lúc khởi động (8 bot cần giãn xa hơn)
+    print("========================================")
+    print(f"🚀 KHỞI ĐỘNG NÔNG TRẠI BOT ({len(accounts)} Accounts, {len(backup_accounts)} Dự bị)")
+    print("========================================")
+
+    # slots: mỗi slot = {acc, process, log_file, error_count, log_pos}
+    slots = []
+
+    for acc in accounts:
+        p, log_file = spawn_bot(acc, python_exec, args.headless, args.no_cut)
+        slots.append({
+            "acc": acc,
+            "process": p,
+            "log_file": log_file,
+            "error_count": 0,
+            "log_pos": 0,
+            "active": True
+        })
+        print(f"👉 Khởi động Luồng [ {acc} ] -> logs/{acc}.log")
         time.sleep(5)
-        
-    print("\n✅ TẤT CẢ LUỒNG ĐÃ ĐƯỢC THẢ RA CÀY. Để tắt toàn bộ Nông trại, bấm Tổ hợp phím Ctrl + C ở cửa sổ này.")
-    
+
+    print(f"\n✅ TẤT CẢ LUỒNG ĐÃ ĐƯỢC THẢ RA CÀY. Ctrl + C để tắt.")
+    if backup_accounts:
+        print(f"🔄 Acc dự bị: {', '.join(backup_accounts)}")
+
+    replaced_count = 0
+
     try:
-        # Treo terminal gốc và liên tục rà soát xem các lính đánh thuê đã cày xong chưa
         while True:
             all_done = True
-            for acc, p, log_file in processes:
-                if p.poll() is None:  # Tiến trình này vẫn đang chạy
-                    all_done = False
-                    break
-            
-            if all_done:
-                print("\n🎉 BÁO CÁO: TẤT CẢ CÁC LUỒNG BOT ĐÃ BÁO HẾT VIỆC VÀ TỰ ĐÓNG! Nông trại xin phép đóng cửa, chúc bạn thu hoạch vui vẻ!")
+
+            for slot in slots:
+                if not slot["active"]:
+                    continue
+
+                # Bot đã tự thoát
+                if slot["process"].poll() is not None:
+                    continue
+
+                all_done = False
+
+                # Đếm lỗi mới trong log
+                log_path = f"logs/{slot['acc']}.log"
+                new_errors, new_pos = count_recent_errors(log_path, slot["log_pos"])
+                slot["log_pos"] = new_pos
+                slot["error_count"] += new_errors
+
+                # Quá nhiều lỗi liên tiếp → thay thế
+                if slot["error_count"] >= MAX_CONSECUTIVE_ERRORS:
+                    old_acc = slot["acc"]
+                    print(f"\n⚠️ Bot [{old_acc}] fail {slot['error_count']} lần liên tiếp!")
+
+                    # Kill bot cũ
+                    slot["process"].terminate()
+                    slot["log_file"].close()
+
+                    if backup_accounts:
+                        new_acc = backup_accounts.pop(0)
+                        print(f"🔄 Thay thế [{old_acc}] -> [{new_acc}]")
+
+                        time.sleep(3)
+                        p, log_file = spawn_bot(new_acc, python_exec, args.headless, args.no_cut)
+                        slot["acc"] = new_acc
+                        slot["process"] = p
+                        slot["log_file"] = log_file
+                        slot["error_count"] = 0
+                        slot["log_pos"] = 0
+                        replaced_count += 1
+                        print(f"👉 Bot [{new_acc}] đã lên sàn! -> logs/{new_acc}.log")
+                    else:
+                        print(f"❌ Hết acc dự bị! Bot [{old_acc}] dừng vĩnh viễn.")
+                        slot["active"] = False
+
+            # Check tất cả đã xong chưa
+            active_running = [s for s in slots if s["active"] and s["process"].poll() is None]
+            if len(active_running) == 0:
+                print(f"\n🎉 TẤT CẢ BOT ĐÃ XONG! (Đã thay thế {replaced_count} lần)")
                 break
-                
-            time.sleep(3)
-            
+
+            time.sleep(10)
+
     except KeyboardInterrupt:
         print("\n🛑 Đang Tắt Khẩn Cấp Nông Trại...")
-        
-    # Đảm bảo đóng dọn gàng các luồng log
-    for acc, p, log_file in processes:
-        if p.poll() is None:
-            p.terminate()
-        log_file.close()
-        
+
+    # Dọn dẹp
+    for slot in slots:
+        if slot["process"].poll() is None:
+            slot["process"].terminate()
+        slot["log_file"].close()
+
     print("Nông trại đã nghỉ hưu an toàn.")
-            
+
 if __name__ == "__main__":
     main()
