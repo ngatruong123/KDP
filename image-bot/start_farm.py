@@ -108,8 +108,30 @@ def main():
                 if not slot["active"]:
                     continue
 
-                # Bot đã tự thoát
+                # Bot đã tự thoát (crash hoặc hết việc)
                 if slot["process"].poll() is not None:
+                    exit_code = slot["process"].returncode
+                    # Exit code 0 = hết việc bình thường, khác 0 = crash
+                    if exit_code != 0:
+                        old_acc = slot["acc"]
+                        print(f"\n💀 Bot [{old_acc}] crash (exit code {exit_code})!")
+                        slot["log_file"].close()
+                        if backup_accounts:
+                            new_acc = backup_accounts.pop(0)
+                            print(f"🔄 Thay thế [{old_acc}] -> [{new_acc}]")
+                            time.sleep(3)
+                            p, log_file = spawn_bot(new_acc, python_exec, args.headless, args.no_cut, resume_from=old_acc)
+                            slot["acc"] = new_acc
+                            slot["process"] = p
+                            slot["log_file"] = log_file
+                            slot["error_count"] = 0
+                            slot["log_pos"] = 0
+                            replaced_count += 1
+                            print(f"👉 Bot [{new_acc}] đã lên sàn! -> logs/{new_acc}.log")
+                            continue
+                        else:
+                            print(f"❌ Hết acc dự bị! Bot [{old_acc}] dừng vĩnh viễn.")
+                            slot["active"] = False
                     continue
 
                 all_done = False
