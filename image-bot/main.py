@@ -21,6 +21,7 @@ async def main():
     parser.add_argument("--acc", type=str, default="default", help="Tên tài khoản (Ví dụ: acc1, acc2)")
     parser.add_argument("--headless", action="store_true", help="Chạy ẩn (không mở giao diện Chrome)")
     parser.add_argument("--no-cut", action="store_true", help="Chỉ upscale, không cắt nền")
+    parser.add_argument("--resume-from", type=str, default="", help="Tên acc cũ bị fail — bot mới sẽ nhặt lại dòng kẹt của acc đó")
     args = parser.parse_args()
 
     global _skip_bg_removal
@@ -42,6 +43,11 @@ async def main():
     await bot.init_browser()
     await bot.check_login_and_navigate()
 
+    # 3. Nếu là bot thay thế, reset các dòng kẹt "Đang chạy (acc_cũ)" về "Chờ xử lý"
+    if args.resume_from:
+        print(f"🔄 Tiếp quản từ [{args.resume_from}] — reset dòng kẹt...")
+        gmanager.reset_stuck_jobs(args.resume_from)
+
     input_dir = f"inputs_temp_{args.acc}" if args.acc != "default" else "inputs_temp"
     os.makedirs(input_dir, exist_ok=True)
 
@@ -50,7 +56,7 @@ async def main():
     current_round = 0
     job_idx = 0
     consecutive_web_errors = 0
-    first_run = True  # Lần đầu reset lỗi luôn trong checkout (tiết kiệm 1 lần tải sheet)
+    first_run = True
     while True:
         if job_idx > 0:
             delay = random.uniform(1, 4)
@@ -142,8 +148,8 @@ async def main():
             # Xử lý song song: upscale + tách nền (2 thread)
             # process_single_image sẽ đè bản upscaled lên file gốc
             process_args = [(fp, fp.rsplit('.', 1)[0] + '_VIP.png') for fp in output_files_paths]
-            print(f"⚡ Xử lý song song {len(output_files_paths)} ảnh (2 thread)...")
-            with ThreadPoolExecutor(max_workers=2) as executor:
+            print(f"⚡ Xử lý {len(output_files_paths)} ảnh...")
+            with ThreadPoolExecutor(max_workers=1) as executor:
                 raw_results = list(executor.map(_process_one, process_args))
 
             # Lọc bỏ file thất bại (None) — KHÔNG upload ảnh chưa cắt nền

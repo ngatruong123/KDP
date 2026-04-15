@@ -29,8 +29,8 @@ def count_recent_errors(log_path, last_pos):
     except Exception:
         return 0, last_pos
 
-def spawn_bot(acc, python_exec, headless, no_cut):
-    """Khởi động 1 bot, trả về (process, log_file)"""
+def spawn_bot(acc, python_exec, headless, no_cut, resume_from=None):
+    """Khởi động 1 bot, trả về (process, log_file). resume_from = tên acc cũ bị fail để bot mới nhặt lại dòng kẹt."""
     log_file = open(f"logs/{acc}.log", "w", encoding="utf-8")
     env = os.environ.copy()
     env["PYTHONUTF8"] = "1"
@@ -39,6 +39,8 @@ def spawn_bot(acc, python_exec, headless, no_cut):
         cmd.append("--headless")
     if no_cut:
         cmd.append("--no-cut")
+    if resume_from:
+        cmd.extend(["--resume-from", resume_from])
 
     p = subprocess.Popen(cmd, stdout=log_file, stderr=log_file, env=env)
     return p, log_file
@@ -90,7 +92,7 @@ def main():
             "active": True
         })
         print(f"👉 Khởi động Luồng [ {acc} ] -> logs/{acc}.log")
-        time.sleep(5)
+        time.sleep(10)  # Giãn 10s giữa các bot để tránh peak CPU/RAM khi khởi động đồng thời
 
     print(f"\n✅ TẤT CẢ LUỒNG ĐÃ ĐƯỢC THẢ RA CÀY. Ctrl + C để tắt.")
     if backup_accounts:
@@ -132,7 +134,7 @@ def main():
                         print(f"🔄 Thay thế [{old_acc}] -> [{new_acc}]")
 
                         time.sleep(3)
-                        p, log_file = spawn_bot(new_acc, python_exec, args.headless, args.no_cut)
+                        p, log_file = spawn_bot(new_acc, python_exec, args.headless, args.no_cut, resume_from=old_acc)
                         slot["acc"] = new_acc
                         slot["process"] = p
                         slot["log_file"] = log_file

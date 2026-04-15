@@ -24,12 +24,26 @@ class ImageBotCore:
             user_agent=fake_user_agent,
             accept_downloads=True,
             downloads_path=os.path.abspath(self.download_dir),
-            viewport={"width": 1920, "height": 1080},
+            viewport={"width": 1280, "height": 720},
             args=[
-                '--disable-blink-features=AutomationControlled', # Áo tàng hình che mắt Google
-                '--disable-features=DownloadBubble,DownloadBubbleV2' # Cấm cửa Chrome nổi cái bảng Download
+                '--disable-blink-features=AutomationControlled',
+                '--disable-features=DownloadBubble,DownloadBubbleV2',
+                # === TỐI ƯU RAM/CPU CHO MULTI-BOT ===
+                '--disable-gpu',                    # Tắt GPU render (tiết kiệm VRAM + RAM)
+                '--disable-dev-shm-usage',          # Tránh crash /dev/shm trên máy ít RAM
+                '--disable-extensions',             # Tắt extension ăn RAM
+                '--disable-background-networking',  # Tắt request nền
+                '--disable-sync',                   # Tắt đồng bộ Chrome
+                '--disable-translate',              # Tắt dịch trang
+                '--no-first-run',
+                '--disable-component-update',       # Tắt tự update component
+                '--disable-background-timer-throttling',
+                '--js-flags=--max-old-space-size=256',  # Giới hạn JS heap 256MB/tab
             ]
         )
+        # Đóng tất cả tab thừa (persistent context thường mở sẵn 1 tab about:blank)
+        for p in self.browser.pages:
+            await p.close()
         self.page = await self.browser.new_page()
 
     async def check_login_and_navigate(self):

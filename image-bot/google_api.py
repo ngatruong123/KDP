@@ -333,6 +333,24 @@ class GoogleManager:
             print(f"⚠️ Lỗi phân rã Thư mục Drive: {e}")
             return None
 
+    def reset_stuck_jobs(self, old_acc_name):
+        """Reset các dòng đang kẹt 'Đang chạy (old_acc)' về 'Chờ xử lý' để bot thay thế nhặt lại."""
+        records = self.worksheet.get_all_records()
+        cells_to_update = []
+        for index, row in enumerate(records):
+            clean_row = {str(k).strip().lower(): v for k, v in row.items()}
+            status = str(clean_row.get("status", "")).strip()
+            # Khớp dòng có "Đang chạy (acc_cũ)" — bot cũ bị kill nên dòng bị kẹt
+            if f"({old_acc_name})" in status and "đang chạy" in status.lower():
+                row_num = index + 2
+                cells_to_update.append(gspread.Cell(row_num, self._status_col, "Chờ xử lý"))
+                print(f"   🔄 Dòng {row_num}: [{status}] → [Chờ xử lý]")
+
+        if cells_to_update:
+            self.worksheet.update_cells(cells_to_update, value_input_option='USER_ENTERED')
+        print(f"✅ Đã reset {len(cells_to_update)} dòng kẹt của [{old_acc_name}] về 'Chờ xử lý'.")
+        return len(cells_to_update)
+
     def reset_failed_jobs(self):
         """Quét toàn bộ sheet, dòng nào có status chứa 'lỗi' hoặc '❌' thì reset về 'Chờ xử lý' (batch 1 lần)"""
         records = self.worksheet.get_all_records()
