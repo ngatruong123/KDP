@@ -286,34 +286,58 @@ class ImageBotCore:
                 await self.page.keyboard.press("Enter")
 
             print("⏳ Bắt đầu ra lệnh Chạy! (Mắt thần đang liên tục dòm xem tiến trình)...")
-            
-            await asyncio.sleep(4) # Đợi vài giây cho các mảng ảnh 0% xuất hiện
-            
+
+            await asyncio.sleep(8) # Chờ lâu hơn cho CPU lag khi multi-bot
+
             # LOGIC CHỜ THÔNG MINH 100%: Dò tìm có nhãn % nào trên màn hình không (Ví dụ: 60%, 99%)
+            # Nếu 15s đầu không thấy % → có thể prompt chưa gửi được, thử gửi lại
             wait_time = 0
-            while wait_time < 240: 
+            ever_saw_progress = False
+            while wait_time < 240:
                 progress_indicators = self.page.locator("text=/^\\d+%$/")
                 if await progress_indicators.count() > 0:
-                    print("⏳ Google đang vẽ vội... đợi full 100%...")
+                    ever_saw_progress = True
+                    print("⏳ Google đang vẽ vời... đợi full 100%...")
                     await asyncio.sleep(4)
                     wait_time += 4
                 else:
+                    if not ever_saw_progress and wait_time < 15:
+                        # Chưa thấy progress → chờ thêm (CPU lag, prompt chưa gửi kịp)
+                        await asyncio.sleep(3)
+                        wait_time += 3
+                        continue
                     print("🎉 Ố LÀ LA! 100% Hoàn Tất! Các mảng ảnh đã nặn xong!!!")
                     await asyncio.sleep(3) # Chờ cho ảnh render sắc nét
                     break
             else:
                 print("⚠️ TIMEOUT: Đã chờ 240s mà progress vẫn chưa xong!")
-            
+
+            # Scroll xuống cuối để ép Google render lazy images
+            await self.page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            await asyncio.sleep(2)
+
             # 4. Quét Lấy Nút Tải Xuống Ổn Định thông qua Phép thử Lọc Trừ URL Mới/Cũ
             new_img_locators = await self.page.locator("img").all()
             new_target_srcs = []
-            
+
             for n_img in new_img_locators:
                 src = await n_img.get_attribute("src")
                 if src and src not in old_srcs_before_gen and src != uploaded_src:
                     if src not in new_target_srcs:
                         new_target_srcs.append(src)
-                        
+
+            # Nếu chưa thấy, thử scroll và quét lại 1 lần nữa
+            if len(new_target_srcs) == 0:
+                print("🔍 Chưa thấy ảnh mới, scroll quét lại...")
+                await self.page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                await asyncio.sleep(4)
+                new_img_locators = await self.page.locator("img").all()
+                for n_img in new_img_locators:
+                    src = await n_img.get_attribute("src")
+                    if src and src not in old_srcs_before_gen and src != uploaded_src:
+                        if src not in new_target_srcs:
+                            new_target_srcs.append(src)
+
             if len(new_target_srcs) == 0:
                 print("⚠️ Lỗi: Không thấy nhô ra ảnh mới nào! (Canvas bị đóng băng kéo hoặc lag mạng).")
                 continue
