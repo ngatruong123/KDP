@@ -61,12 +61,38 @@ class ImageBotCore:
                 # Chờ tối đa 20s cho UI nút Tạo web hiện ra (4 Chrome ẩn khiến CPU lag gắt, React load cực chậm)
                 new_btn_selector = "button:has-text('Dự án mới'), div[role='button']:has-text('Dự án mới'), span:has-text('Dự án mới'), button:has-text('Tạo dự án'), button:has-text('New project'), button:has-text('Blank project')"
                 await self.page.wait_for_selector(new_btn_selector, state="attached", timeout=20000)
-                new_btn = self.page.locator(new_btn_selector).first
-                print("✨ Tìm thấy nút [Dự án mới] ở trang chủ, đang tự động click để mở Canvas...")
-                await new_btn.click(force=True)
-                # Chờ Canvas load lên
-                await self.page.wait_for_selector("input[type='file']", state="attached", timeout=10000)
-                print("✅ Đã bung Canvas thành công! Bỏ qua Pause, tự động chạy luôn!")
+
+                # Google Flow đổi UI — cần click nhiều lần mới vào Canvas
+                for click_attempt in range(5):
+                    new_btn = self.page.locator(new_btn_selector).first
+                    print(f"✨ Click nút [Dự án mới] lần {click_attempt+1}...")
+                    await new_btn.click(force=True)
+                    await asyncio.sleep(3)
+
+                    # Kiểm tra đã vào Canvas chưa
+                    try:
+                        await self.page.wait_for_selector("input[type='file']", state="attached", timeout=8000)
+                        print("✅ Đã bung Canvas thành công!")
+                        break
+                    except Exception:
+                        # Chưa vào — có thể hiện popup/dialog, thử click tiếp
+                        # Thử bấm các nút confirm/ok nếu có
+                        for confirm_sel in ["button:has-text('Tạo')", "button:has-text('Create')", "button:has-text('OK')", "button:has-text('Bắt đầu')", "button:has-text('Start')"]:
+                            try:
+                                confirm_btn = self.page.locator(confirm_sel).first
+                                if await confirm_btn.count() > 0:
+                                    await confirm_btn.click(force=True)
+                                    print(f"   ↳ Bấm thêm nút [{confirm_sel}]")
+                                    await asyncio.sleep(2)
+                            except Exception:
+                                pass
+                else:
+                    # 5 lần vẫn chưa vào → thử reload trang
+                    print("⚠️ Click 5 lần chưa vào Canvas, thử reload...")
+                    await self.page.reload(wait_until="domcontentloaded")
+                    await asyncio.sleep(5)
+                    await self.page.wait_for_selector("input[type='file']", state="attached", timeout=15000)
+                    print("✅ Đã vào Canvas sau khi reload!")
             except Exception:
                 # Nếu không thấy nút tạo mới + Không có Canvas -> Chắc chắn là chưa đăng nhập!
                 print("\n--- 🔒 CHƯA ĐĂNG NHẬP HOẶC MẤT PHIÊN ---")
