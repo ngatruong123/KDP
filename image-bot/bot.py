@@ -46,10 +46,61 @@ class ImageBotCore:
             await p.close()
         self.page = await self.browser.new_page()
 
+    async def dismiss_popups(self):
+        """Tự động tắt mọi popup/dialog/overlay chặn giao diện"""
+        dismissed = 0
+        try:
+            # 1. Dialog/Modal: tìm nút đóng phổ biến
+            close_selectors = [
+                "button[aria-label='Close']", "button[aria-label='Đóng']",
+                "button:has-text('Đóng')", "button:has-text('Close')",
+                "button:has-text('Got it')", "button:has-text('Đã hiểu')",
+                "button:has-text('OK')", "button:has-text('Dismiss')",
+                "button:has-text('Skip')", "button:has-text('Bỏ qua')",
+                "button:has-text('No thanks')", "button:has-text('Không, cảm ơn')",
+                "button:has-text('Maybe later')", "button:has-text('Để sau')",
+                "button:has-text('Accept')", "button:has-text('Chấp nhận')",
+                "button:has-text('I agree')", "button:has-text('Đồng ý')",
+                "button:has-text('Continue')", "button:has-text('Tiếp tục')",
+            ]
+            for sel in close_selectors:
+                try:
+                    btn = self.page.locator(sel).first
+                    if await btn.count() > 0 and await btn.is_visible():
+                        await btn.click(force=True, timeout=3000)
+                        dismissed += 1
+                        await asyncio.sleep(1)
+                except Exception:
+                    pass
+
+            # 2. Overlay/backdrop: xóa bằng JS
+            await self.page.evaluate('''() => {
+                document.querySelectorAll(
+                    '[role="dialog"], [role="alertdialog"], .modal, .overlay, .backdrop, ' +
+                    '[class*="modal"], [class*="popup"], [class*="overlay"], [class*="dialog"], ' +
+                    '[role="alert"], [role="status"], snack-bar-container, .mat-mdc-snack-bar-container, ' +
+                    '[class*="consent"], [class*="cookie"], [class*="banner"]'
+                ).forEach(el => el.remove());
+            }''')
+
+            # 3. Escape để đóng bất kỳ popup nào còn sót
+            await self.page.keyboard.press("Escape")
+            await asyncio.sleep(0.5)
+
+        except Exception:
+            pass
+
+        if dismissed > 0:
+            print(f"🧹 Đã tắt {dismissed} popup chặn giao diện")
+        return dismissed
+
     async def check_login_and_navigate(self):
         await self.page.goto("https://labs.google/fx/vi/tools/flow", wait_until="domcontentloaded")
         print("🌍 Đã mở URL Google Labs Flow Mới!")
-        
+
+        await asyncio.sleep(3)
+        await self.dismiss_popups()
+
         print("🔍 Đang rà soát trạng thái...")
         try:
             # Thử chờ 20s xem có sẵn File Input không (Trường hợp Web tải thẳng vào Canvas cũ)
@@ -64,6 +115,7 @@ class ImageBotCore:
 
                 # Google Flow đổi UI — cần click nhiều lần mới vào Canvas
                 for click_attempt in range(5):
+                    await self.dismiss_popups()
                     new_btn = self.page.locator(new_btn_selector).first
                     print(f"✨ Click nút [Dự án mới] lần {click_attempt+1}...")
                     await new_btn.click(force=True)
@@ -87,8 +139,15 @@ class ImageBotCore:
                             except Exception:
                                 pass
                 else:
-                    # 5 lần vẫn chưa vào → thử reload trang
-                    print("⚠️ Click 5 lần chưa vào Canvas, thử reload...")
+                    # 5 lần vẫn chưa vào → chụp screenshot debug rồi reload
+                    print("⚠️ Click 5 lần chưa vào Canvas!")
+                    try:
+                        debug_path = f"debug_popup_{self.acc_name}.png"
+                        await self.page.screenshot(path=debug_path, full_page=True)
+                        print(f"📸 Đã chụp màn hình debug: {debug_path}")
+                    except Exception:
+                        pass
+                    print("🔄 Thử reload...")
                     await self.page.reload(wait_until="domcontentloaded")
                     await asyncio.sleep(5)
                     await self.page.wait_for_selector("input[type='file']", state="attached", timeout=15000)
