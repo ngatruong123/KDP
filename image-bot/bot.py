@@ -41,10 +41,14 @@ class ImageBotCore:
                 '--js-flags=--max-old-space-size=256',  # Giới hạn JS heap 256MB/tab
             ]
         )
-        # Đóng tất cả tab thừa (persistent context thường mở sẵn 1 tab about:blank)
-        for p in self.browser.pages:
-            await p.close()
-        self.page = await self.browser.new_page()
+        # Dùng tab có sẵn hoặc tạo mới (persistent context luôn mở sẵn 1 tab)
+        if self.browser.pages:
+            self.page = self.browser.pages[0]
+            # Đóng tab thừa (giữ lại tab đầu tiên)
+            for p in self.browser.pages[1:]:
+                await p.close()
+        else:
+            self.page = await self.browser.new_page()
 
     async def dismiss_popups(self):
         """Tự động tắt mọi popup/dialog/overlay chặn giao diện"""
