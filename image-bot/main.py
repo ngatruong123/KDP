@@ -2,6 +2,7 @@ import os
 import asyncio
 import argparse
 import random
+import time
 from google_api import GoogleManager
 from bot import ImageBotCore
 from kdp_local_bot import process_single_image
@@ -29,14 +30,23 @@ async def main():
     mode = "CHỈ UPSCALE" if args.no_cut else "UPSCALE + CẮT NỀN"
     print(f"🌟=== KHỞI ĐỘNG CÔNG NHÂN BOT (Account: {args.acc}, Mode: {mode}) ===🌟")
     
-    # 1. Kết nối Google API
-    try:
-        gmanager = GoogleManager()
-    except Exception as e:
-        import traceback
-        print(f"❌ Lỗi khởi tạo API: {e}")
-        traceback.print_exc()
-        return
+    # 1. Kết nối Google API (retry tối đa 5 lần nếu mất mạng)
+    gmanager = None
+    for attempt in range(5):
+        try:
+            gmanager = GoogleManager()
+            break
+        except Exception as e:
+            print(f"⚠️ Lỗi kết nối API (lần {attempt+1}/5): {e}")
+            if attempt < 4:
+                wait = 30 * (attempt + 1)
+                print(f"⏳ Chờ {wait}s rồi thử lại...")
+                time.sleep(wait)
+            else:
+                import traceback
+                print(f"❌ Lỗi khởi tạo API: {e}")
+                traceback.print_exc()
+                return
 
     # 2. Mở trình duyệt
     bot = ImageBotCore(acc_name=args.acc, headless=args.headless)
@@ -62,7 +72,19 @@ async def main():
             delay = random.uniform(1, 4)
             await asyncio.sleep(delay)
 
-        job = gmanager.checkout_next_job(args.acc, reset_errors=first_run)
+        # Checkout job với retry khi mất mạng
+        job = None
+        for _net_retry in range(3):
+            try:
+                job = gmanager.checkout_next_job(args.acc, reset_errors=first_run)
+                break
+            except Exception as e:
+                print(f"⚠️ Lỗi mạng khi checkout (lần {_net_retry+1}/3): {e}")
+                if _net_retry < 2:
+                    await asyncio.sleep(30)
+                else:
+                    print("❌ Mất mạng 3 lần liên tiếp, chờ 2 phút...")
+                    await asyncio.sleep(120)
         first_run = False
         if not job:
             current_round += 1
