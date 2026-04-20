@@ -171,7 +171,10 @@ async def main():
             # Khởi chạy Thuật toán Truy vết Nguồn gốc Tự động tạo thư mục Out
             # Ví dụ: Ảnh có nguồn từ Folder "Meo_KDP" => Xây ngay Thư mục "Meo_KDP_Out"
             print(f"🔍 Đang truy vết Nguồn gốc của ảnh để phân loại thư mục...")
-            job_specific_folder_id = gmanager.resolve_output_folder(id_goc, base_output_folder_id)
+            # Khi id có |, ảnh nằm trong subfolder → cần đi lên 2 cấp (file→subfolder→folder gốc)
+            resolve_id = id_goc.split("|")[0] if "|" in id_goc else id_goc
+            resolve_depth = 2 if "|" in id_goc else 1
+            job_specific_folder_id = gmanager.resolve_output_folder(resolve_id, base_output_folder_id, depth=resolve_depth)
             
             link_share = f"https://drive.google.com/drive/folders/{job_specific_folder_id}"
 

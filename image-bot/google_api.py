@@ -531,19 +531,23 @@ class GoogleManager:
             print(f"   📂 Subfolder {name}: {folder_id[:15]}...")
         return folder_ids
 
-    def resolve_output_folder(self, file_id, base_output_id):
-        """Dynamic Routing: Finds the parent of the input file and routes the output to a {parent_name}_Out subfolder."""
+    def resolve_output_folder(self, file_id, base_output_id, depth=1):
+        """Dynamic Routing: Finds the parent of the input file and routes the output to a {parent_name}_Out subfolder.
+        depth: số cấp đi lên từ file. depth=1 (mặc định) → lấy parent trực tiếp.
+               depth=2 → lấy grandparent (dùng khi ảnh nằm trong subfolder)."""
         try:
             # 1. Inspect origin
             safe_id = self.extract_drive_id(file_id)
-            file_meta = self.drive_service.files().get(fileId=safe_id, fields="parents").execute()
-            parents = file_meta.get('parents', [])
-            
-            if not parents:
-                return base_output_id
-                
-            # 2. Extract parent folder name
-            parent_id = parents[0]
+            current_id = safe_id
+            for _ in range(depth):
+                meta = self.drive_service.files().get(fileId=current_id, fields="parents").execute()
+                parents = meta.get('parents', [])
+                if not parents:
+                    return base_output_id
+                current_id = parents[0]
+
+            # 2. Extract folder name tại cấp đích
+            parent_id = current_id
             parent_meta = self.drive_service.files().get(fileId=parent_id, fields="name").execute()
             parent_name = parent_meta.get('name')
             
