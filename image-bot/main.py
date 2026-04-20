@@ -121,10 +121,18 @@ async def main():
             os.remove(input_path)
 
         # Trích tải ảnh từ G-Drive của bạn xuống ổ cứng
-        success = gmanager.download_file_from_drive(id_goc, input_path)
-        if not success:
-            gmanager.update_job_status(row_num, "Lỗi Tải GDrive ❌")
-            continue
+        if "|" in id_goc:
+            # Nhiều ảnh gộp → download tất cả
+            input_paths = gmanager.download_multiple_from_drive(id_goc, input_dir)
+            if not input_paths:
+                gmanager.update_job_status(row_num, "Lỗi Tải GDrive ❌")
+                continue
+            input_path = input_paths  # list paths
+        else:
+            success = gmanager.download_file_from_drive(id_goc, input_path)
+            if not success:
+                gmanager.update_job_status(row_num, "Lỗi Tải GDrive ❌")
+                continue
 
         try:
             # ---> BƯỚC NÀY ĐANG ĐƯỢC ĐẶT Ở CHẾ ĐỘ RÀ SOÁT BẢO TRÌ (DEBUG MODE)
@@ -222,8 +230,11 @@ async def main():
             for f in all_temps:
                 if f and os.path.exists(f):
                     os.remove(f)
-            if os.path.exists(input_path):
-                os.remove(input_path)
+            # Cleanup input files (có thể là list hoặc str)
+            input_cleanup = input_path if isinstance(input_path, list) else [input_path]
+            for ip in input_cleanup:
+                if os.path.exists(ip):
+                    os.remove(ip)
             print("🧹 Đã dọn sạch file tạm.")
 
         except Exception as e:

@@ -295,40 +295,90 @@ class GoogleManager:
         except Exception: return raw_link
 
     def expand_folder_into_jobs(self, row_num, folder_id, original_row_dict):
-        """Hút sạch hình ảnh trong Folder và bơm xuống đáy Bảng tính. KHÔNG đè link folder gốc."""
+        """Hút sạch hình ảnh trong Folder và bơm xuống đáy Bảng tính. KHÔNG đè link folder gốc.
+        Nếu folder có subfolder → gộp ảnh từ các subfolder theo index, tạo dòng với ID|ID.
+        Nếu folder chỉ có ảnh → bung từng ảnh thành dòng riêng (flow cũ)."""
         # Đánh dấu TRƯỚC khi bung — chống duplicate khi nhiều bot chạy song song
         self.update_job_status(row_num, "Đang bung Folder... 📂")
 
-        query = f"'{folder_id}' in parents and trashed=false and (mimeType contains 'image/jpeg' or mimeType contains 'image/png' or mimeType contains 'image/webp')"
         try:
-            results = self.drive_service.files().list(q=query, fields="files(id, name)", pageSize=1000).execute()
-            files = results.get('files', [])
-            if not files:
-                self.update_job_status(row_num, "Folder rỗng ⚠️")
-                return None
+            # Kiểm tra subfolder trước
+            subfolder_query = f"'{folder_id}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false"
+            subfolder_results = self.drive_service.files().list(q=subfolder_query, fields="files(id, name)", pageSize=100).execute()
+            subfolders = subfolder_results.get('files', [])
 
             headers = self._headers
 
-            # Append TẤT CẢ ảnh thành dòng mới — KHÔNG đè dòng folder gốc
-            new_rows_data = []
-            for f in files:
-                row_arr = []
-                for h in headers:
-                    val = original_row_dict.get(h, "")
-                    h_lower = str(h).strip().lower()
-                    if h_lower == "id_anh_goc": val = f['id']
-                    elif h_lower == "status": val = "Chờ xử lý"
-                    elif h_lower == "result": val = ""
-                    row_arr.append(val)
-                new_rows_data.append(row_arr)
+            if subfolders:
+                # === CÓ SUBFOLDER → gộp ảnh theo index ===
+                print(f"📂 Folder có {len(subfolders)} subfolder, gộp ảnh theo index...")
+                subfolder_images = []
+                for sf in subfolders:
+                    img_query = f"'{sf['id']}' in parents and trashed=false and (mimeType contains 'image/jpeg' or mimeType contains 'image/png' or mimeType contains 'image/webp')"
+                    img_results = self.drive_service.files().list(q=img_query, fields="files(id, name)", pageSize=1000, orderBy="name").execute()
+                    imgs = img_results.get('files', [])
+                    subfolder_images.append(imgs)
+                    print(f"   📁 {sf['name']}: {len(imgs)} ảnh")
 
-            if new_rows_data:
-                self.worksheet.append_rows(new_rows_data, value_input_option='USER_ENTERED')
-                print(f"🎉 Đã bơm {len(new_rows_data)} tấm ảnh từ Folder xuống đáy Google Sheet!")
+                if not any(subfolder_images):
+                    self.update_job_status(row_num, "Subfolder rỗng ⚠️")
+                    return None
 
-            self.update_job_status(row_num, f"Đã bung {len(files)} ảnh ✅")
+                # Gộp theo index: subfolder A có [img1, img2], subfolder B có [ref1, ref2]
+                # → dòng 1: img1|ref1, dòng 2: img2|ref2
+                max_len = max(len(imgs) for imgs in subfolder_images)
+                new_rows_data = []
+                for idx in range(max_len):
+                    ids_at_index = []
+                    for imgs in subfolder_images:
+                        if idx < len(imgs):
+                            ids_at_index.append(imgs[idx]['id'])
+                    if not ids_at_index:
+                        continue
+                    combined_id = "|".join(ids_at_index)
+                    row_arr = []
+                    for h in headers:
+                        val = original_row_dict.get(h, "")
+                        h_lower = str(h).strip().lower()
+                        if h_lower == "id_anh_goc": val = combined_id
+                        elif h_lower == "status": val = "Chờ xử lý"
+                        elif h_lower == "result": val = ""
+                        row_arr.append(val)
+                    new_rows_data.append(row_arr)
 
-            return None  # Trả None để bot bỏ qua dòng folder, chạy các dòng ảnh mới
+                if new_rows_data:
+                    self.worksheet.append_rows(new_rows_data, value_input_option='USER_ENTERED')
+                    print(f"🎉 Đã gộp và bơm {len(new_rows_data)} dòng (từ {len(subfolders)} subfolder) xuống đáy Google Sheet!")
+
+                self.update_job_status(row_num, f"Đã bung {len(subfolders)} subfolder → {len(new_rows_data)} dòng ✅")
+            else:
+                # === KHÔNG CÓ SUBFOLDER → flow cũ: bung từng ảnh thành dòng riêng ===
+                query = f"'{folder_id}' in parents and trashed=false and (mimeType contains 'image/jpeg' or mimeType contains 'image/png' or mimeType contains 'image/webp')"
+                results = self.drive_service.files().list(q=query, fields="files(id, name)", pageSize=1000).execute()
+                files = results.get('files', [])
+                if not files:
+                    self.update_job_status(row_num, "Folder rỗng ⚠️")
+                    return None
+
+                new_rows_data = []
+                for f in files:
+                    row_arr = []
+                    for h in headers:
+                        val = original_row_dict.get(h, "")
+                        h_lower = str(h).strip().lower()
+                        if h_lower == "id_anh_goc": val = f['id']
+                        elif h_lower == "status": val = "Chờ xử lý"
+                        elif h_lower == "result": val = ""
+                        row_arr.append(val)
+                    new_rows_data.append(row_arr)
+
+                if new_rows_data:
+                    self.worksheet.append_rows(new_rows_data, value_input_option='USER_ENTERED')
+                    print(f"🎉 Đã bơm {len(new_rows_data)} tấm ảnh từ Folder xuống đáy Google Sheet!")
+
+                self.update_job_status(row_num, f"Đã bung {len(files)} ảnh ✅")
+
+            return None
         except Exception as e:
             print(f"⚠️ Lỗi phân rã Thư mục Drive: {e}")
             return None
@@ -428,6 +478,19 @@ class GoogleManager:
                 try: os.remove(save_path)
                 except Exception: pass
             return False
+
+    def download_multiple_from_drive(self, id_string, output_dir):
+        """Tách id_string bằng '|', download từng file, trả list paths."""
+        ids = [x.strip() for x in id_string.split("|") if x.strip()]
+        paths = []
+        for i, file_id in enumerate(ids):
+            save_path = os.path.join(output_dir, f"multi_{i}_{file_id[:8]}.jpg")
+            success = self.download_file_from_drive(file_id, save_path)
+            if success:
+                paths.append(save_path)
+            else:
+                print(f"⚠️ Không tải được file {i+1}/{len(ids)} (ID: {file_id[:8]}...)")
+        return paths
 
     def create_drive_folder(self, folder_name, parent_id=None):
         """Tạo một thư mục mới trên Google Drive để chứa kết quả đầu ra"""

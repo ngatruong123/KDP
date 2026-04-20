@@ -176,15 +176,22 @@ class ImageBotCore:
 
 
     async def process_image_job(self, row_num, input_image_path, prompt, ratio, qty_per_loop, total_qty, download_reso="2K"):
-        """Thực thi Logic lõi tải file + sinh Image-to-Image qua Locator Nội suy Mù"""
+        """Thực thi Logic lõi tải file + sinh Image-to-Image qua Locator Nội suy Mù.
+        input_image_path: str (1 ảnh) hoặc list[str] (nhiều ảnh upload cùng lúc)."""
         print(f"🤖 Con Mắt AI: Bắt đầu chạy {total_qty} ảnh cho Row {row_num}...")
 
+        # Chuẩn hoá input thành list
+        if isinstance(input_image_path, str):
+            input_image_paths = [input_image_path]
+        else:
+            input_image_paths = input_image_path
+
         try:
-            print(f"🤖 Bắt đầu rà tìm cửa Upload cho vòng lặp đầu tiên...")
+            print(f"🤖 Bắt đầu rà tìm cửa Upload cho vòng lặp đầu tiên ({len(input_image_paths)} ảnh)...")
             # 1. Rà tìm Khe hở cắm File của giao diện (Bất chấp class gì)
             file_input = self.page.locator("input[type='file']")
             await file_input.wait_for(state="attached", timeout=60000)
-            
+
             # Chụp ảnh hiện trạng danh sách thẻ img trước khi Upload
             old_img_count_before_up = await self.page.locator("img").count()
             old_srcs = []
@@ -193,17 +200,18 @@ class ImageBotCore:
                 if src: old_srcs.append(src)
 
             # CÓ THỂ GOOGLE LABS CÓ NHIỀU NÚT FILE ẨN (VD: Avatar, Cài đặt). Ta nhồi ảnh vào TẤT CẢ nút File để chắc ăn.
+            # Playwright set_input_files hỗ trợ list paths để upload nhiều ảnh cùng lúc
             file_inputs = self.page.locator("input[type='file']")
             input_count = await file_inputs.count()
             for k in range(input_count):
                 try:
                     await file_inputs.nth(k).evaluate("el => el.value = ''")
-                    await file_inputs.nth(k).set_input_files(input_image_path)
+                    await file_inputs.nth(k).set_input_files(input_image_paths)
                 except Exception:
                     pass
 
-            print("👁️ [AI]: Đã rỉa được lỗ hở Upload! Tải ảnh lên thành công.")
-            
+            print(f"👁️ [AI]: Đã rỉa được lỗ hở Upload! Tải {len(input_image_paths)} ảnh lên thành công.")
+
             # CHỜ ĐỢI ẢNH TẢI LÊN ĐẠT 100% (KHẮC PHỤC LỖI CLICK SỚM)
             # Chờ lâu hơn để web kịp hiện % (CPU lag khi multi-bot)
             await asyncio.sleep(4)
@@ -223,25 +231,28 @@ class ImageBotCore:
 
             print("👁️ [AI]: Đang dùng X-Ray lọc màng Render. Chờ ảnh mới trồi lên Canvas...")
             wait_render = 0
-            uploaded_src = None
+            uploaded_srcs = set()
+            expected_count = len(input_image_paths)
             while wait_render < 30: # Quét liên tục trong 60 giây (30 vòng x 2s)
                 new_img_count_after_up = await self.page.locator("img").count()
                 for k in range(new_img_count_after_up):
                     src = await self.page.locator("img").nth(k).get_attribute("src")
                     if src and src not in old_srcs:
-                        uploaded_src = src
-                        break
-                if uploaded_src: break
+                        uploaded_srcs.add(src)
+                if len(uploaded_srcs) >= expected_count: break
                 await asyncio.sleep(2)
                 wait_render += 1
-                    
-            if uploaded_src:
-                print("✅ Ố LÀ LA! Bắt trúng tim đen (Blob URL) của Ảnh Gốc!")
-                self.uploaded_img_locator = self.page.locator(f"img[src='{uploaded_src}']").first
+
+            if uploaded_srcs:
+                print(f"✅ Ố LÀ LA! Bắt trúng {len(uploaded_srcs)} Blob URL của Ảnh Gốc!")
+                # Dùng ảnh đầu tiên làm locator chính (cho chip attach)
+                first_src = next(iter(uploaded_srcs))
+                self.uploaded_img_locator = self.page.locator(f"img[src='{first_src}']").first
             else:
                 print("⚠️ Á Đù! Chờ 40s rồi mà Google không chịu nhả Blob Ảnh ra! Có thể Web bị lag.")
                 self.uploaded_img_locator = self.page.locator("img").last
-                
+                uploaded_srcs = set()
+
         except Exception as e:
             print(f"🛑 [LỖI TẢI ẢNH GỐC]: \nChi tiết: {e}")
             return []
@@ -411,7 +422,7 @@ class ImageBotCore:
 
             for n_img in new_img_locators:
                 src = await n_img.get_attribute("src")
-                if src and src not in old_srcs_before_gen and src != uploaded_src:
+                if src and src not in old_srcs_before_gen and src not in uploaded_srcs:
                     if src not in new_target_srcs:
                         new_target_srcs.append(src)
 
@@ -423,7 +434,7 @@ class ImageBotCore:
                 new_img_locators = await self.page.locator("img").all()
                 for n_img in new_img_locators:
                     src = await n_img.get_attribute("src")
-                    if src and src not in old_srcs_before_gen and src != uploaded_src:
+                    if src and src not in old_srcs_before_gen and src not in uploaded_srcs:
                         if src not in new_target_srcs:
                             new_target_srcs.append(src)
 
