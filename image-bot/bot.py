@@ -18,10 +18,17 @@ class ImageBotCore:
         fake_user_agent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
         
         # Cấu hình proxy (nếu có)
+        # Hỗ trợ format: http://user:pass@ip:port
         proxy_config = None
         if self.proxy:
-            proxy_config = {"server": self.proxy}
-            print(f"🌐 Bot [{self.acc_name}] đang chạy qua proxy: {self.proxy}")
+            from urllib.parse import urlparse
+            parsed = urlparse(self.proxy)
+            proxy_config = {"server": f"{parsed.scheme}://{parsed.hostname}:{parsed.port}"}
+            if parsed.username:
+                proxy_config["username"] = parsed.username
+            if parsed.password:
+                proxy_config["password"] = parsed.password
+            print(f"🌐 Bot [{self.acc_name}] đang chạy qua proxy: {parsed.hostname}:{parsed.port}")
 
         # Mở Chrome theo thông số headless từ file điều khiển
         self.browser = await self.playwright.chromium.launch_persistent_context(
