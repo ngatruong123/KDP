@@ -4,11 +4,24 @@ import subprocess
 import argparse
 import time
 
-MAX_CONSECUTIVE_ERRORS = 5
-ERROR_KEYWORDS = ["Lỗi Web Vĩnh Viễn", "LỖI CHÍ MẠNG", "Lỗi khởi tạo API", "Thất bại khi dọn rác", "Không gài được ảnh", "TIMEOUT"]
+MAX_CONSECUTIVE_ERRORS = 3
+# Keyword báo hiệu 1 job thất bại (bot không tạo/download được ảnh)
+ERROR_KEYWORDS = [
+    "Lỗi Web Vĩnh Viễn", "LỖI CHÍ MẠNG", "Lỗi khởi tạo API",
+    "Không thấy nhô ra ảnh mới nào",   # Bot tạo ảnh nhưng không thấy output
+    "LỖI TẢI ẢNH GỐC",                # Upload ảnh gốc thất bại
+    "LỖI GIAO DIỆN CHAT",              # Không thao tác được UI
+    "Lỗi Web ❌",                       # Job lỗi web (kể cả không vĩnh viễn)
+    "Lỗi văng App ❌",                  # Bot crash giữa chừng
+    "❌❌❌ LỖI BOT",                    # Exception không bắt được
+    "TIMEOUT",
+]
+# Keyword báo hiệu 1 job thành công (có ảnh download được)
+SUCCESS_KEYWORDS = ["HOÀN TẤT", "📥 Đã hứng thành công ảnh"]
 
 def count_recent_errors(log_path, last_pos):
-    """Đọc log từ vị trí cuối cùng, đếm lỗi liên tiếp gần nhất"""
+    """Đọc log từ vị trí cuối cùng, đếm lỗi liên tiếp gần nhất.
+    Chỉ reset về 0 khi có JOB THÀNH CÔNG (có ảnh download), không reset bởi emoji ✅ lung tung."""
     try:
         with open(log_path, "r", encoding="utf-8") as f:
             f.seek(last_pos)
@@ -22,8 +35,8 @@ def count_recent_errors(log_path, last_pos):
         for line in new_content.strip().split("\n"):
             if any(kw in line for kw in ERROR_KEYWORDS):
                 errors += 1
-            elif "✅" in line or "📥" in line or "🎉" in line:
-                errors = 0  # Reset khi có thành công
+            elif any(kw in line for kw in SUCCESS_KEYWORDS):
+                errors = 0  # Chỉ reset khi thực sự có ảnh được tạo/download
 
         return errors, new_pos
     except Exception:
