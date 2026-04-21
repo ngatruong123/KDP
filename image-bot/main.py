@@ -23,6 +23,7 @@ async def main():
     parser.add_argument("--headless", action="store_true", help="Chạy ẩn (không mở giao diện Chrome)")
     parser.add_argument("--no-cut", action="store_true", help="Chỉ upscale, không cắt nền")
     parser.add_argument("--resume-from", type=str, default="", help="Tên acc cũ bị fail — bot mới sẽ nhặt lại dòng kẹt của acc đó")
+    parser.add_argument("--proxy", type=str, default="", help="Proxy server (vd: http://user:pass@ip:port)")
     args = parser.parse_args()
 
     global _skip_bg_removal
@@ -49,7 +50,8 @@ async def main():
                 return
 
     # 2. Mở trình duyệt
-    bot = ImageBotCore(acc_name=args.acc, headless=args.headless)
+    proxy = args.proxy.strip() if args.proxy else None
+    bot = ImageBotCore(acc_name=args.acc, headless=args.headless, proxy=proxy)
     await bot.init_browser()
     await bot.check_login_and_navigate()
 

@@ -3,9 +3,10 @@ import asyncio
 from playwright.async_api import async_playwright
 
 class ImageBotCore:
-    def __init__(self, acc_name="default", headless=False):
+    def __init__(self, acc_name="default", headless=False, proxy=None):
         self.acc_name = acc_name
         self.headless = headless
+        self.proxy = proxy
         self.user_data_dir = f"chrome_profile_{acc_name}" if acc_name != "default" else "chrome_profile"
         self.download_dir = f"outputs_temp_{acc_name}" if acc_name != "default" else "outputs_temp"
         os.makedirs(self.download_dir, exist_ok=True)
@@ -16,6 +17,12 @@ class ImageBotCore:
         # Ép User-Agent giống hệt máy Mac xịn để qua mặt lớp chống Bot chặn thẻ Headless của Google
         fake_user_agent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
         
+        # Cấu hình proxy (nếu có)
+        proxy_config = None
+        if self.proxy:
+            proxy_config = {"server": self.proxy}
+            print(f"🌐 Bot [{self.acc_name}] đang chạy qua proxy: {self.proxy}")
+
         # Mở Chrome theo thông số headless từ file điều khiển
         self.browser = await self.playwright.chromium.launch_persistent_context(
             user_data_dir=os.path.abspath(self.user_data_dir),
@@ -25,6 +32,7 @@ class ImageBotCore:
             accept_downloads=True,
             downloads_path=os.path.abspath(self.download_dir),
             viewport={"width": 1280, "height": 720},
+            proxy=proxy_config,
             args=[
                 '--disable-blink-features=AutomationControlled',
                 '--disable-features=DownloadBubble,DownloadBubbleV2',

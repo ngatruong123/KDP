@@ -42,7 +42,7 @@ def count_recent_errors(log_path, last_pos):
     except Exception:
         return 0, last_pos
 
-def spawn_bot(acc, python_exec, headless, no_cut, resume_from=None):
+def spawn_bot(acc, python_exec, headless, no_cut, resume_from=None, proxy=None):
     """Khởi động 1 bot, trả về (process, log_file). resume_from = tên acc cũ bị fail để bot mới nhặt lại dòng kẹt."""
     log_file = open(f"logs/{acc}.log", "w", encoding="utf-8")
     env = os.environ.copy()
@@ -54,6 +54,8 @@ def spawn_bot(acc, python_exec, headless, no_cut, resume_from=None):
         cmd.append("--no-cut")
     if resume_from:
         cmd.extend(["--resume-from", resume_from])
+    if proxy:
+        cmd.extend(["--proxy", proxy])
 
     p = subprocess.Popen(cmd, stdout=log_file, stderr=log_file, env=env)
     return p, log_file
@@ -64,6 +66,7 @@ def main():
     parser.add_argument("--backup-accounts", type=str, default="", help="Danh sách acc dự bị (vd: backup1,backup2)")
     parser.add_argument("--headless", action="store_true", help="Chạy ẩn (không mở Window Chrome tĩnh)")
     parser.add_argument("--no-cut", action="store_true", help="Chỉ upscale, không cắt nền")
+    parser.add_argument("--proxy", type=str, default="", help="Proxy server (vd: http://user:pass@ip:port) — tất cả bot sẽ chạy qua proxy này")
     args = parser.parse_args()
 
     accounts = [acc.strip() for acc in args.accounts.split(",") if acc.strip()]
@@ -87,15 +90,19 @@ def main():
         if os.path.exists("venv/bin/python"):
             python_exec = "venv/bin/python"
 
+    proxy = args.proxy.strip() if args.proxy else ""
+
     print("========================================")
     print(f"🚀 KHỞI ĐỘNG NÔNG TRẠI BOT ({len(accounts)} Accounts, {len(backup_accounts)} Dự bị)")
+    if proxy:
+        print(f"🌐 Proxy: {proxy}")
     print("========================================")
 
     # slots: mỗi slot = {acc, process, log_file, error_count, log_pos}
     slots = []
 
     for acc in accounts:
-        p, log_file = spawn_bot(acc, python_exec, args.headless, args.no_cut)
+        p, log_file = spawn_bot(acc, python_exec, args.headless, args.no_cut, proxy=proxy)
         slots.append({
             "acc": acc,
             "process": p,
@@ -133,7 +140,7 @@ def main():
                             new_acc = backup_accounts.pop(0)
                             print(f"🔄 Thay thế [{old_acc}] -> [{new_acc}]")
                             time.sleep(3)
-                            p, log_file = spawn_bot(new_acc, python_exec, args.headless, args.no_cut, resume_from=old_acc)
+                            p, log_file = spawn_bot(new_acc, python_exec, args.headless, args.no_cut, resume_from=old_acc, proxy=proxy)
                             slot["acc"] = new_acc
                             slot["process"] = p
                             slot["log_file"] = log_file
