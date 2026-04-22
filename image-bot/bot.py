@@ -1,22 +1,30 @@
 import os
+import base64
 import asyncio
 from playwright.async_api import async_playwright
 
 class ImageBotCore:
-    def __init__(self, acc_name="default", headless=False, proxy=None):
+    def __init__(self, acc_name="default", headless=False, proxy=None, use_fingerprint=False, cdp_port=9222):
         self.acc_name = acc_name
         self.headless = headless
         self.proxy = proxy
+        self.use_fingerprint = use_fingerprint
+        self.cdp_port = cdp_port
+        self._fp_proc = None  # fingerprint-chromium subprocess
         self.user_data_dir = f"chrome_profile_{acc_name}" if acc_name != "default" else "chrome_profile"
         self.download_dir = f"outputs_temp_{acc_name}" if acc_name != "default" else "outputs_temp"
         os.makedirs(self.download_dir, exist_ok=True)
 
     async def init_browser(self):
         """Khởi tạo trình duyệt Playwright với Profile cá nhân để vượt Đăng nhập"""
+        if self.use_fingerprint:
+            await self._init_fingerprint_browser()
+            return
+
         self.playwright = await async_playwright().start()
         # Ép User-Agent giống hệt máy Mac xịn để qua mặt lớp chống Bot chặn thẻ Headless của Google
         fake_user_agent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
-        
+
         # Cấu hình proxy (nếu có)
         # Hỗ trợ format: http://user:pass@ip:port
         proxy_config = None
@@ -64,6 +72,25 @@ class ImageBotCore:
                 await p.close()
         else:
             self.page = await self.browser.new_page()
+
+    async def _init_fingerprint_browser(self):
+        """Launch fingerprint-chromium and connect via CDP."""
+        from browser_launcher import launch_fingerprint_browser
+        ctx, pw, proc = await launch_fingerprint_browser(
+            acc_name=self.acc_name,
+            headless=self.headless,
+            proxy=self.proxy,
+            port=self.cdp_port,
+        )
+        self.browser = ctx
+        self.playwright = pw
+        self._fp_proc = proc
+        # Get first page from the fingerprint browser context
+        if ctx.pages:
+            self.page = ctx.pages[0]
+        else:
+            self.page = await ctx.new_page()
+        print(f"[fingerprint] Bot [{self.acc_name}] connected via CDP port {self.cdp_port}")
 
     async def dismiss_popups(self):
         """Tự động tắt mọi popup/dialog/overlay chặn giao diện"""
@@ -620,6 +647,105 @@ class ImageBotCore:
 
         return downloaded_files
 
+    async def upload_reference_image(self, image_path):
+        """Attach a reference image to the editor via clipboard paste.
+
+        Reads image, writes to browser clipboard as PNG blob, pastes with Ctrl+V.
+        Returns True when thumbnail is visible in chat bar.
+        """
+        abs_path = os.path.abspath(image_path)
+        if not os.path.isfile(abs_path):
+            print(f"[ref] Reference image not found: {abs_path}")
+            return False
+
+        print(f"[ref] Attaching reference: {os.path.basename(image_path)}")
+
+        with open(abs_path, "rb") as f:
+            image_b64 = base64.b64encode(f.read()).decode()
+        ext = os.path.splitext(abs_path)[1].lower()
+        mime = {
+            ".png": "image/png", ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg", ".webp": "image/webp",
+        }.get(ext, "image/png")
+
+        # Find and click the editor / input area
+        editor = self.page.locator("[contenteditable='true']:visible")
+        if await editor.count() == 0:
+            # Fallback to textarea
+            editor = self.page.locator("textarea:visible").last
+        if await editor.count() == 0:
+            print("[ref] No editor found for pasting reference image")
+            return False
+
+        await editor.first.click(force=True)
+        await asyncio.sleep(0.3)
+
+        # Write image to clipboard as PNG (Clipboard API only supports image/png)
+        wrote = await self.page.evaluate("""
+            async ([b64, mimeType]) => {
+                try {
+                    const bin = atob(b64);
+                    const arr = new Uint8Array(bin.length);
+                    for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+                    const srcBlob = new Blob([arr], { type: mimeType });
+
+                    // Convert to PNG via canvas (Clipboard API only accepts image/png)
+                    const img = new Image();
+                    const loaded = new Promise((resolve, reject) => {
+                        img.onload = resolve;
+                        img.onerror = reject;
+                    });
+                    img.src = URL.createObjectURL(srcBlob);
+                    await loaded;
+
+                    const canvas = document.createElement('canvas');
+                    canvas.width = img.naturalWidth;
+                    canvas.height = img.naturalHeight;
+                    canvas.getContext('2d').drawImage(img, 0, 0);
+                    URL.revokeObjectURL(img.src);
+
+                    const pngBlob = await new Promise(r => canvas.toBlob(r, 'image/png'));
+                    await navigator.clipboard.write([
+                        new ClipboardItem({ 'image/png': pngBlob })
+                    ]);
+                    return true;
+                } catch (e) {
+                    return e.message;
+                }
+            }
+        """, [image_b64, mime])
+
+        if wrote is not True:
+            print(f"[ref] Clipboard write failed: {wrote}")
+            return False
+
+        # Paste into editor
+        await self.page.keyboard.press("Control+v")
+        print("[ref] Pasted reference image into editor")
+
+        # Wait for thumbnail to appear (generic selector)
+        thumb_selector = 'img[alt*="media"], img[alt*="uploaded"], img[src^="blob:"]'
+        for i in range(1, 16):  # 15 x 2s = 30s
+            await asyncio.sleep(2)
+            thumbs = self.page.locator(thumb_selector)
+            if await thumbs.count() > 0:
+                # Verify it's a small thumbnail (not a full generated image)
+                for t in range(await thumbs.count()):
+                    try:
+                        bb = await thumbs.nth(t).bounding_box()
+                        if bb and bb['width'] < 200 and bb['height'] < 200:
+                            print(f"[ref] Reference thumbnail appeared after {i * 2}s")
+                            return True
+                    except Exception:
+                        continue
+
+        print("[ref] WARNING: Thumbnail did not appear after paste")
+        return False
+
     async def close(self):
-        await self.browser.close()
-        await self.playwright.stop()
+        if self.use_fingerprint and self._fp_proc:
+            from browser_launcher import close_fingerprint_browser
+            await close_fingerprint_browser(self.browser, self.playwright, self._fp_proc)
+        else:
+            await self.browser.close()
+            await self.playwright.stop()

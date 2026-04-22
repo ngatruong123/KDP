@@ -24,13 +24,34 @@ async def main():
     parser.add_argument("--no-cut", action="store_true", help="Chỉ upscale, không cắt nền")
     parser.add_argument("--resume-from", type=str, default="", help="Tên acc cũ bị fail — bot mới sẽ nhặt lại dòng kẹt của acc đó")
     parser.add_argument("--proxy", type=str, default="", help="Proxy server (vd: http://user:pass@ip:port)")
+    parser.add_argument("--fingerprint", action="store_true", help="Dùng fingerprint-chromium thay vì Chrome mặc định")
+    parser.add_argument("--cdp-port", type=int, default=9222, help="CDP port cho fingerprint browser")
+    parser.add_argument("--template", type=str, default="{prompt}", help="Prompt template (vd: '{prompt}, watercolor style')")
     args = parser.parse_args()
+
+    from events import emit
+    from state_manager import StateManager
+    from prompt_builder import build_prompt
 
     global _skip_bg_removal
     _skip_bg_removal = args.no_cut
     mode = "CHỈ UPSCALE" if args.no_cut else "UPSCALE + CẮT NỀN"
     print(f"🌟=== KHỞI ĐỘNG CÔNG NHÂN BOT (Account: {args.acc}, Mode: {mode}) ===🌟")
-    
+
+    # Init state manager
+    state_mgr = StateManager(args.acc)
+    state_mgr.load()
+    interrupted = state_mgr.get_interrupted_jobs()
+    if interrupted:
+        print(f"[state] Detected {len(interrupted)} interrupted job(s) from previous run:")
+        for ij in interrupted:
+            print(f"   Row {ij['row_num']}: status={ij['status']}, attempts={ij['attempts']}")
+        # Mark them as failed so Sheets queue can re-process
+        for ij in interrupted:
+            state_mgr.finish_job(ij['row_num'], "failed")
+
+    emit("bot_started", acc=args.acc, fingerprint=args.fingerprint)
+
     # 1. Kết nối Google API (retry tối đa 5 lần nếu mất mạng)
     gmanager = None
     for attempt in range(5):
@@ -51,7 +72,10 @@ async def main():
 
     # 2. Mở trình duyệt
     proxy = args.proxy.strip() if args.proxy else None
-    bot = ImageBotCore(acc_name=args.acc, headless=args.headless, proxy=proxy)
+    bot = ImageBotCore(
+        acc_name=args.acc, headless=args.headless, proxy=proxy,
+        use_fingerprint=args.fingerprint, cdp_port=args.cdp_port,
+    )
     await bot.init_browser()
     await bot.check_login_and_navigate()
 
@@ -107,7 +131,14 @@ async def main():
         so_luong = job['so_luong']
         tong_so_luong = job['tong_so_luong']
         download_reso = job['download_reso']
-        
+        ref_image_id = job.get('reference_image', '').strip()
+
+        # Apply prompt template
+        prompt = build_prompt(args.template, {"prompt": prompt})
+
+        state_mgr.start_job(row_num, args.acc)
+        emit("job_started", row=row_num, prompt=prompt[:100])
+
         print(f"\n======================================")
         print(f"⚙️ NHẬN LỆNH DÒNG {row_num} (ID ẢNH: {id_goc[:8]}...)")
 
@@ -137,16 +168,30 @@ async def main():
                 continue
 
         try:
-            # ---> BƯỚC NÀY ĐANG ĐƯỢC ĐẶT Ở CHẾ ĐỘ RÀ SOÁT BẢO TRÌ (DEBUG MODE)
-            # Bởi vì các thao tác ấn click chuột của Playwright lên thẳng Web của Google
-            # Cần căn chỉnh trực tiếp vị trí nên script bot.process_image_job đang được Comment lại ở file bot.py
+            # Download & upload reference image (if provided in Sheets)
+            ref_local_path = None
+            if ref_image_id:
+                ref_local_path = f"{input_dir}/ref_{row_num}.jpg"
+                ref_success = gmanager.download_file_from_drive(ref_image_id, ref_local_path)
+                if ref_success:
+                    print(f"[ref] Downloaded reference image for row {row_num}")
+                    state_mgr.update_job(row_num, "uploading_reference")
+                    await bot.upload_reference_image(ref_local_path)
+                else:
+                    print(f"[ref] Failed to download reference image, continuing without it")
+                    ref_local_path = None
 
             # GỌI LOGIC TẠO ẢNH BẰNG TRÌNH DUYỆT GHÉP NỐI VỚI GOOGLE LABS
+            state_mgr.update_job(row_num, "generating")
             print(f"🚀 Bắt chuyển giao lệnh cho Bot ({tong_so_luong} ảnh, độ nét y/c: {download_reso})...")
             output_files_paths = await bot.process_image_job(row_num, input_path, prompt, job['aspect_ratio'], so_luong, tong_so_luong, download_reso)
             
+            emit("generation_done", row=row_num, count=len(output_files_paths) if output_files_paths else 0)
+
             if not output_files_paths:
                 consecutive_web_errors += 1
+                state_mgr.finish_job(row_num, "failed")
+                emit("job_failed", row=row_num, reason="no_output")
                 retry_count = job.get('retry_count', 0)
                 if retry_count < 5:
                     gmanager.update_job_status(row_num, f"Lỗi Web ❌ Chờ xử lý (thử lại {retry_count + 1})")
@@ -171,7 +216,7 @@ async def main():
             base_output_folder_id = "1yKY-v8gU8O0hbnS4XJc5GU1L2U3oMpKR"
             
             # Khởi chạy Thuật toán Truy vết Nguồn gốc Tự động tạo thư mục Out
-            # Ví dụ: Ảnh có nguồn từ Folder "Meo_KDP" => Xây ngay Thư mục "Meo_KDP_Out"
+            # Ví dụ: Ảnh có nguồn từ Folder "Meo_remakeai" => Xây ngay Thư mục "Meo_KDP_Out"
             print(f"🔍 Đang truy vết Nguồn gốc của ảnh để phân loại thư mục...")
             # Khi id có |, ảnh nằm trong subfolder → cần đi lên 2 cấp (file→subfolder→folder gốc)
             resolve_id = id_goc.split("|")[0] if "|" in id_goc else id_goc
@@ -225,9 +270,13 @@ async def main():
             total_uploaded = len(upscaled_paths) + len(processed_paths)
             if total_uploaded > 0:
                 gmanager.update_job_status(row_num, "Xong ✅", result_link=link_share)
+                state_mgr.finish_job(row_num, "success")
+                emit("job_done", row=row_num, uploaded=total_uploaded)
                 print(f"🎉 HOÀN TẤT! {len(upscaled_paths)} upscaled + {len(processed_paths)} processed đã lên Drive.")
             else:
                 gmanager.update_job_status(row_num, "Lỗi Xử Lý Ảnh ❌", result_link="Không có ảnh nào xử lý thành công")
+                state_mgr.finish_job(row_num, "failed")
+                emit("job_failed", row=row_num, reason="processing_failed")
                 print(f"❌ TOÀN BỘ ảnh xử lý thất bại cho dòng {row_num}")
 
             # Cleanup temp files
@@ -237,6 +286,8 @@ async def main():
                     os.remove(f)
             # Cleanup input files (có thể là list hoặc str)
             input_cleanup = input_path if isinstance(input_path, list) else [input_path]
+            if ref_local_path:
+                input_cleanup.append(ref_local_path)
             for ip in input_cleanup:
                 if os.path.exists(ip):
                     os.remove(ip)
@@ -247,6 +298,8 @@ async def main():
             err_msg = traceback.format_exc()
             print(f"❌❌❌ LỖI BOT: {e}")
             print(err_msg)
+            state_mgr.finish_job(row_num, "failed")
+            emit("job_failed", row=row_num, reason=str(e)[:200])
             with open("error_log.txt", "a", encoding="utf-8") as f:
                 f.write(f"\n{'='*50}\nDòng {row_num}: {e}\n{err_msg}\n")
             retry_count = job.get('retry_count', 0)
@@ -255,6 +308,8 @@ async def main():
             else:
                 gmanager.update_job_status(row_num, "Lỗi Kịch Bản Vĩnh Viễn ❌")
 
+    state_mgr.set_idle()
+    emit("bot_stopped", acc=args.acc)
     await bot.close()
     print("\n✅ === HOÀN TẤT NHIỆM VỤ, NGHỈ NGƠI === ✅")
 

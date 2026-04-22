@@ -42,7 +42,7 @@ def count_recent_errors(log_path, last_pos):
     except Exception:
         return 0, last_pos
 
-def spawn_bot(acc, python_exec, headless, no_cut, resume_from=None, proxy=None):
+def spawn_bot(acc, python_exec, headless, no_cut, resume_from=None, proxy=None, fingerprint=False, cdp_port=None):
     """Khởi động 1 bot, trả về (process, log_file). resume_from = tên acc cũ bị fail để bot mới nhặt lại dòng kẹt."""
     log_file = open(f"logs/{acc}.log", "w", encoding="utf-8")
     env = os.environ.copy()
@@ -56,6 +56,10 @@ def spawn_bot(acc, python_exec, headless, no_cut, resume_from=None, proxy=None):
         cmd.extend(["--resume-from", resume_from])
     if proxy:
         cmd.extend(["--proxy", proxy])
+    if fingerprint:
+        cmd.append("--fingerprint")
+        if cdp_port:
+            cmd.extend(["--cdp-port", str(cdp_port)])
 
     p = subprocess.Popen(cmd, stdout=log_file, stderr=log_file, env=env)
     return p, log_file
@@ -67,6 +71,7 @@ def main():
     parser.add_argument("--headless", action="store_true", help="Chạy ẩn (không mở Window Chrome tĩnh)")
     parser.add_argument("--no-cut", action="store_true", help="Chỉ upscale, không cắt nền")
     parser.add_argument("--proxy", type=str, default="", help="Proxy server (vd: http://user:pass@ip:port) — tất cả bot sẽ chạy qua proxy này")
+    parser.add_argument("--fingerprint", action="store_true", help="Dùng fingerprint-chromium thay vì Chrome mặc định")
     args = parser.parse_args()
 
     accounts = [acc.strip() for acc in args.accounts.split(",") if acc.strip()]
@@ -101,17 +106,19 @@ def main():
     # slots: mỗi slot = {acc, process, log_file, error_count, log_pos}
     slots = []
 
-    for acc in accounts:
-        p, log_file = spawn_bot(acc, python_exec, args.headless, args.no_cut, proxy=proxy)
+    for i, acc in enumerate(accounts):
+        cdp_port = 9222 + i if args.fingerprint else None
+        p, log_file = spawn_bot(acc, python_exec, args.headless, args.no_cut, proxy=proxy, fingerprint=args.fingerprint, cdp_port=cdp_port)
         slots.append({
             "acc": acc,
             "process": p,
             "log_file": log_file,
             "error_count": 0,
             "log_pos": 0,
-            "active": True
+            "active": True,
+            "cdp_port": cdp_port,
         })
-        print(f"👉 Khởi động Luồng [ {acc} ] -> logs/{acc}.log")
+        print(f"👉 Khởi động Luồng [ {acc} ] -> logs/{acc}.log" + (f" (CDP:{cdp_port})" if cdp_port else ""))
         time.sleep(10)  # Giãn 10s giữa các bot để tránh peak CPU/RAM khi khởi động đồng thời
 
     print(f"\n✅ TẤT CẢ LUỒNG ĐÃ ĐƯỢC THẢ RA CÀY. Ctrl + C để tắt.")
@@ -140,7 +147,7 @@ def main():
                             new_acc = backup_accounts.pop(0)
                             print(f"🔄 Thay thế [{old_acc}] -> [{new_acc}]")
                             time.sleep(3)
-                            p, log_file = spawn_bot(new_acc, python_exec, args.headless, args.no_cut, resume_from=old_acc, proxy=proxy)
+                            p, log_file = spawn_bot(new_acc, python_exec, args.headless, args.no_cut, resume_from=old_acc, proxy=proxy, fingerprint=args.fingerprint, cdp_port=slot.get("cdp_port"))
                             slot["acc"] = new_acc
                             slot["process"] = p
                             slot["log_file"] = log_file
@@ -176,7 +183,7 @@ def main():
                         print(f"🔄 Thay thế [{old_acc}] -> [{new_acc}]")
 
                         time.sleep(3)
-                        p, log_file = spawn_bot(new_acc, python_exec, args.headless, args.no_cut, resume_from=old_acc)
+                        p, log_file = spawn_bot(new_acc, python_exec, args.headless, args.no_cut, resume_from=old_acc, proxy=proxy, fingerprint=args.fingerprint, cdp_port=slot.get("cdp_port"))
                         slot["acc"] = new_acc
                         slot["process"] = p
                         slot["log_file"] = log_file

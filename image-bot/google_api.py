@@ -277,7 +277,8 @@ class GoogleManager:
                     "tong_so_luong": tong_sl,
                     "aspect_ratio": str(clean_row.get("aspect_ratio", "1:1")),
                     "download_reso": dl_str,
-                    "retry_count": retry_count
+                    "retry_count": retry_count,
+                    "reference_image": str(clean_row.get("reference_image", "")),
                 }
         return None # Hết việc!
 
