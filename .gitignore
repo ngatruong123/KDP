@@ -1,1 +1,12 @@
-image-bot/chrome_profile/\nimage-bot/outputs_temp/\nimage-bot/inputs_temp/\nimage-bot/venv/\nimage-bot/__pycache__/\n**/.DS_Store\ntext-bot/venv/\ntext-bot/__pycache__/
+**/.DS_Store
+**/__pycache__/
+*.pyc
+.claude/settings.local.json
+
+image-bot/.env
+image-bot/chrome_profile/
+image-bot/outputs_temp/
+image-bot/inputs_temp/
+image-bot/venv/
+
+text-bot/venv/
